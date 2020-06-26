@@ -5,6 +5,9 @@ experiments into a bi-level optimization problem.
 This version is adapted from the module used within Kipet - this version works
 with all pyomo models and does not require Kipet.
 
+If you want to use the EstimationPotential feature, you need kipet, but it is
+not necessary to run full models.
+
 Author: Kevin McBride 2020
 
 """
@@ -30,6 +33,13 @@ from scipy.optimize import (
     minimize,
     )
 
+use_mixin = False
+try:
+    from kipet.library.EstimationMixin import EstimationMixin
+    use_mixin = True
+except:
+    print('Kipet libraries not found, estimation potential will not be possible')
+
 global opt_dict
 opt_dict = dict()
 global opt_count
@@ -39,6 +49,7 @@ global global_param_name
 global global_constraint_name
 global parameter_var_name
 global global_set_name
+global parameter_names
 
 # If for some reason your model has these attributes, you will have a problem
 global_set_name = 'global_parameter_set'
@@ -48,7 +59,7 @@ global_constraint_name = 'fix_params_to_global_nsd_constraint'
 # Header template
 iteration_spacer = Template('\n' + '#'*30 + ' $iter ' + '#'*30 + '\n')
 
-class NestedSchurDecomposition():
+class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
     
     """Nested Schur Decomposition approach to parameter fitting using multiple
     experiments
@@ -83,16 +94,29 @@ class NestedSchurDecomposition():
         self.objective_name = self._kwargs.pop('objective_name', None)
         self.gtol = self._kwargs.pop('gtol', 1e-12)
         self.method = self._kwargs.pop('method', 'trust-constr')
+        self.use_estimability = self._kwargs.pop('use_est_param', False)
         
         global parameter_var_name
         parameter_var_name = param_var_name
         
+        global parameter_names
+        parameter_names = list(self.d_init.keys())
+
         # Run assertions that the model is correctly structured
         self._test_models()
+
+        # Reduce models using estimability analysis
+        if self.use_estimability:
+            if use_mixin:
+                parameter_names = self.reduce_models()
+            else:
+                raise InputError('The required module EstimationMixin is not available')
         
         # Add the global constraints to the model
         self._add_global_constraints()
         self._prep_models()
+
+
         
     def _test_models(self):
         """Sanity check on the input models"""
@@ -163,7 +187,7 @@ class NestedSchurDecomposition():
         
         bounds = Bounds(lower_bounds, upper_bounds, True)
         return bounds
-        
+    
     def nested_schur_decomposition(self, debug=False):
         """This is the outer problem controlled by a trust region solver 
         running on scipy. This is the only method that the user needs to 
@@ -179,7 +203,9 @@ class NestedSchurDecomposition():
         """    
         print(iteration_spacer.substitute(iter='NSD Start'))
     
-        d_init = self.d_init #self._generate_initial_d()
+        print(self.d_init)
+    
+        d_init = self.d_init
         d_bounds = self._generate_bounds_object()
     
         self.d_iter = list()
@@ -187,9 +213,9 @@ class NestedSchurDecomposition():
             self.d_iter.append(x)
     
         if self.method in ['trust-exact', 'trust-constr']:
-        # The args for scipy.optimize.minimize
+
             fun = _inner_problem
-            x0 = list(d_init.values()) #list(d_init.values()) if isinstance(d_init, dict) else d_init
+            x0 = list(d_init.values())
             args = (self.models_dict,)
             jac = _calculate_m
             hess = _calculate_M
@@ -204,6 +230,8 @@ class NestedSchurDecomposition():
                                callback=callback,
                                bounds=d_bounds,
                                options=dict(gtol=self.gtol,
+                                       #     verbose=3,
+                                            #maxiter=10,
                                             #initial_tr_radius=0.1,
                                             #max_tr_radius=0.1
                                        ),
@@ -272,7 +300,6 @@ def _optimize(model, d_vals, verbose=False):
     global global_param_name
     global parameter_var_name
     
-    delta = 1e-12
     ipopt = SolverFactory('ipopt')
     tmpfile_i = "ipopt_output"
 
@@ -284,11 +311,11 @@ def _optimize(model, d_vals, verbose=False):
     
     results = ipopt.solve(model,
                           symbolic_solver_labels=True,
-                          keepfiles=True, 
+                          keepfiles=False, 
                           tee=verbose, 
                           logfile=tmpfile_i)
     
-    return  model
+    return model
 
 def _inner_problem(d_init_list, models, generate_gradients=False, initialize=False):
     """Calculates the inner problem using the scenario info and the global
@@ -316,41 +343,37 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     global global_constraint_name
     global parameter_var_name
     global global_param_name
+    global parameter_names
      
-    opt_count += 1   
-        
+    opt_count += 1      
     options = {'verbose' : False}
     _models = copy.copy(models) 
-  
-    m = 0
-    M = 0
+    
     Si = []
     Ki = []
     Ei = []
-    
+    M_size = len(d_init_list)
+    M = pd.DataFrame(np.zeros((M_size, M_size)), index=parameter_names, columns=parameter_names)
+    m = pd.DataFrame(np.zeros((M_size, 1)), index=parameter_names, columns=['dual'])
     objective_value = 0
+    
+    d_init = dict(zip(parameter_names, d_init_list))
     
     if opt_count == 0:
         print(iteration_spacer.substitute(iter=f'Inner Problem Initialization'))
-        print(f'Initial parameter set: {d_init_list}')
+        print(f'Initial parameter set: {d_init}')
     else:
         print(iteration_spacer.substitute(iter=f'Inner Problem {opt_count}'))
-        print(f'Current parameter set: {d_init_list}')
+        print(f'Current parameter set: {d_init}')
     
-    for k, model in _models.items():
+    for k_model, model in _models.items():
+        print(f'Performing inner optimization: {k_model}')
         
         valid_parameters = dict(getattr(model, parameter_var_name).items()).keys()
-        
-        if isinstance(d_init_list, dict):
-            d_init = {k: d_init_list[k] for k in valid_parameters}
-        else:
-            d_init = {param: d_init_list[i] for i, param in enumerate(valid_parameters)}
-        
-        # Optimize the inner problem
         model_opt = _optimize(model, d_init)
         
         kkt_df, var_ind, con_ind_new = _get_kkt_matrix(model_opt)
-        duals = [model_opt.dual[getattr(model_opt, global_constraint_name)[key]] for key, val in getattr(model_opt, global_param_name).items()]
+        duals = {key: model_opt.dual[getattr(model_opt, global_constraint_name)[key]] for key, val in getattr(model_opt, global_param_name).items()}
         col_ind  = [var_ind.loc[var_ind[0] == f'{parameter_var_name}[{v}]'].index[0] for v in valid_parameters]
         dummy_constraints = _get_dummy_constraints(model_opt)
         dc = [d for d in dummy_constraints]
@@ -358,16 +381,22 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         # Perform the calculations to get M and m
         K = kkt_df.drop(index=dc, columns=dc)
         E = np.zeros((len(dummy_constraints), K.shape[1]))
-        K_i_inv = np.linalg.inv(K.values)
-         
+        K_i_inv = pd.DataFrame(np.linalg.inv(K.values), index=K.index, columns=K.columns)
+        
         for i, indx in enumerate(col_ind):
             E[i, indx] = 1
-            
-        S = E.dot(K_i_inv).dot(E.T)
-        M += np.linalg.inv(S)
-        m += np.array(duals)
+      
+        S = E.dot(K_i_inv.values).dot(E.T)
+        Mi = pd.DataFrame(np.linalg.inv(S), index=valid_parameters, columns=valid_parameters)
+        M = M.add(Mi).combine_first(M)
+        M = M[parameter_names]
+        M = M.reindex(parameter_names)
+        
+        for param in m.index:
+            if param in duals.keys():
+                m.loc[param] = m.loc[param] + duals[param]
+        
         objective_value += model_opt.objective.expr()
-
         Si.append(S)
         Ki.append(K_i_inv)
         Ei.append(E)
@@ -375,8 +404,8 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     # Save the results in opt_dict - needed for further iterations
     opt_dict[opt_count] = { 'd': d_init_list,
                             'obj': objective_value,
-                            'M': M,
-                            'm': m,
+                            'M': M.values,
+                            'm': m.values.ravel(),
                             'S': Si,
                             'K_inv': Ki,
                             'E': Ei,

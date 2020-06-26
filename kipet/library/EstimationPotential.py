@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 from pyomo.contrib.pynumero.interfaces.pyomo_nlp import PyomoNLP
 from scipy.sparse import coo_matrix
+from scipy.sparse.csc import csc_matrix
 from scipy.sparse.linalg import spsolve
 
 from pyomo.environ import (
@@ -32,7 +33,7 @@ from kipet.library.TemplateBuilder import TemplateBuilder
 
 __author__ = 'Kevin McBride'  #: April 2020
     
-class EstimationPotential(ParameterEstimator):
+class EstimationPotential():
     """This class is for estimability analysis. The algorithm here is the one
     presented by Chen and Biegler (accepted AIChE 2020) using the reduced 
     hessian to select the estimable parameters. 
@@ -363,7 +364,7 @@ class EstimationPotential(ParameterEstimator):
         else:
             self.model.P.pprint()
             
-        return None
+        return {p: self.model.K[p].value for p in Se}
     
     def plot_results(self):
         """This function plots the profiles from the final model after
@@ -507,12 +508,30 @@ class EstimationPotential(ParameterEstimator):
             model_pe.initialize_from_trajectory('Z', simulation_data.Z)
             model_pe.initialize_from_trajectory('dZdt', simulation_data.dZdt)
         
+        if not hasattr(self.model, 'K'):
+            
+            self.model.P.display()
+            
+            self.model.K = Param(self.model.parameter_names, 
+                                  initialize={k: v.value for k, v in self.model.P.items()},
+                                  mutable=True,
+                                  default=1)
+            
+            model_ps = PyomoSimulator(self.model)
+            model_ps.scale_parameters()
+            
+            self.model.K.display()
+            
+        
         for k, v in self.model.P.items():
             ub = self.rho
             lb = 1/self.rho
             self.model.P[k].setlb(lb)
             self.model.P[k].setub(ub)
             self.model.P[k].unfix()
+            self.model.P[k].set_value(1)
+            
+            self.model.P.display()
      
         return None
     
@@ -679,13 +698,17 @@ class EstimationPotential(ParameterEstimator):
         
         m, n = jac.shape
         X = spsolve(coo_matrix(np.mat(Jac_l)).tocsc(), coo_matrix(np.mat(-Jac_f)).tocsc())
-        
+
         col_ind_left = list(set(range(n)).difference(set(col_ind)))
         col_ind_left.sort()
         
         Z = np.zeros([n, n_free])
         Z[col_ind, :] = np.eye(n_free)
-        Z[col_ind_left, :] = X.todense()
+        
+        if isinstance(X, csc_matrix):
+            Z[col_ind_left, :] = X.todense()
+        else:
+            Z[col_ind_left, :] = X.reshape(-1, 1)
     
         Z_mat = coo_matrix(np.mat(Z)).tocsr()
         Z_mat_T = coo_matrix(np.mat(Z).T).tocsr()
