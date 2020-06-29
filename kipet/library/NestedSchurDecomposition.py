@@ -77,10 +77,11 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         
         """
         # The models should be entered in as a dict (for now)
-        self.models_dict = copy.copy(models)
+        self._orig_models = copy.deepcopy(models)
+        self.models_dict = copy.deepcopy(models)
         
         # The global parameter information is needed, especially the bounds
-        self.d_info = d_info
+        self.d_info = copy.copy(d_info)
         self.d_init = {k: v[0] for k, v in d_info.items()}
         
         # Arrange the kwargs
@@ -106,9 +107,16 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         self._test_models()
 
         # Reduce models using estimability analysis
+        
         if self.use_estimability:
             if use_mixin:
                 parameter_names = self.reduce_models()
+                if len(parameter_names) == 0:
+                    print('Cannot use EP on this model, parameter set is empty in reduced models.')
+                    self.d_info = copy.copy(d_info)
+                    self.d_init = {k: v[0] for k, v in d_info.items()}
+                    parameter_names = list(self.d_init.keys())
+                    self.models_dict = self._orig_models
             else:
                 raise InputError('The required module EstimationMixin is not available')
         
@@ -117,7 +125,6 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         self._prep_models()
 
 
-        
     def _test_models(self):
         """Sanity check on the input models"""
         

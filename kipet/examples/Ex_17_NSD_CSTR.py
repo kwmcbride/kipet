@@ -8,9 +8,8 @@ Created on Tue Jun 16 12:57:47 2020
 import numpy as np
 import pandas as pd
 
-from Ex_17_CSTR_setup import make_model_dict
-
-from kipet.library.NestedSchurDecomposition_ep import NestedSchurDecomposition as NSD
+from kipet.library.NestedSchurDecomposition import NestedSchurDecomposition as NSD
+from kipet.examples.Ex_17_CSTR_setup import make_model_dict
 
 # For simplicity, all of the models and simulated data are generated in
 # the following function
@@ -26,7 +25,7 @@ d_init_guess = {p.name: (p.init, p.bounds) for p in parameters}
 parameter_var_name = 'P'
 options = {
     'method': 'trust-constr',
-    'use_est_param': True,      # Use this to reduce model based on EP
+   # 'use_est_param': True,      # Use this to reduce model based on EP
     }
 
 nsd = NSD(models, d_init_guess, parameter_var_name, options)

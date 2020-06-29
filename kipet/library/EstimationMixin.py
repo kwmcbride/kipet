@@ -32,6 +32,7 @@ class EstimationMixin():
         params_est = {}
         set_of_est_params = set()
         for name, model in self.models_dict.items():
+            print(f'Starting EP analysis of {name}')
             
             est_param = EP(model, simulation_data=None, options=options)
             params_est[name] = est_param.estimate()

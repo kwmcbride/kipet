@@ -135,6 +135,11 @@ class EstimationPotential():
         N_pre = len(self.parameter_order)
         N_curr = len(self.parameter_order)
         
+        # if N_pre == 1:
+        #     print('Only one parameter in the model')
+        #     self.model.P.display()
+        #     return None#{p: self.model.K[p].value for p in Se}
+        
         # Step 2
         if self.verbose:
             print(step.substitute(number=2))
@@ -164,7 +169,11 @@ class EstimationPotential():
         
         Se, Sf = self._rank_parameters(reduced_hessian, Se)
         
+        if len(Se) == 0:
+            return dict()
+        
         if len(Se) >= N_curr:
+            print('Se is greater or equal to N_curr')
             number_of_parameters_to_move = len(Se) - N_curr + 1
             for i in range(number_of_parameters_to_move):
                 Sf.insert(0, Se.pop()) 
@@ -510,8 +519,6 @@ class EstimationPotential():
         
         if not hasattr(self.model, 'K'):
             
-            self.model.P.display()
-            
             self.model.K = Param(self.model.parameter_names, 
                                   initialize={k: v.value for k, v in self.model.P.items()},
                                   mutable=True,
@@ -519,9 +526,6 @@ class EstimationPotential():
             
             model_ps = PyomoSimulator(self.model)
             model_ps.scale_parameters()
-            
-            self.model.K.display()
-            
         
         for k, v in self.model.P.items():
             ub = self.rho
@@ -530,8 +534,6 @@ class EstimationPotential():
             self.model.P[k].setub(ub)
             self.model.P[k].unfix()
             self.model.P[k].set_value(1)
-            
-            self.model.P.display()
      
         return None
     
@@ -812,16 +814,25 @@ class EstimationPotential():
         eigenvalues, eigenvectors = np.linalg.eigh(reduced_hessian)
         ranked_parameters = {k: M[abs(len(M)-1-k)] for k in M.keys()}
         
+        #print(eigenvalues)
+        
+        #print(f'The ranked parameters (before filter): {ranked_parameters}')
+        
         for k, v in ranked_parameters.items():
         
             name = v.split('[')[-1].split(']')[0]
             squared_term_1 += abs(1/max(eigenvalues[-(k+1)], parameter_tolerance))
             squared_term_2 += (self.eta**2*max(abs(self.model.P[name].value), self.epsilon)**2)
-                        
+            
+            #print(squared_term_1)
+            #print(squared_term_2)
+            
             if squared_term_1 >= squared_term_2:
                 Sf_update.append(name)
+                #print(f'{name} added to Sf')
             else:
                 Se_update.append(name)
+                #print(f'{name} added to Se')
         
         return Se_update, Sf_update
 
