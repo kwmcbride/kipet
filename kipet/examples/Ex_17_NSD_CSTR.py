@@ -25,7 +25,7 @@ d_init_guess = {p.name: (p.init, p.bounds) for p in parameters}
 parameter_var_name = 'P'
 options = {
     'method': 'trust-constr',
-   # 'use_est_param': True,      # Use this to reduce model based on EP
+    'use_est_param': True,      # Use this to reduce model based on EP
     }
 
 nsd = NSD(models, d_init_guess, parameter_var_name, options)
