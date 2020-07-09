@@ -14,6 +14,7 @@ Author: Kevin McBride 2020
 import copy
 from string import Template
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from pyomo.contrib.pynumero.interfaces.pyomo_nlp import PyomoNLP
@@ -44,12 +45,16 @@ global opt_dict
 opt_dict = dict()
 global opt_count
 opt_count = -1
+global param_dict
+param_dict = dict()
+
 
 global global_param_name
 global global_constraint_name
 global parameter_var_name
 global global_set_name
 global parameter_names
+global pe_sets
 
 # If for some reason your model has these attributes, you will have a problem
 global_set_name = 'global_parameter_set'
@@ -102,21 +107,29 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         
         global parameter_names
         parameter_names = list(self.d_init.keys())
-
+        
+        global pe_sets
+        pe_sets = {}
+        self.pe_sets = pe_sets
+    
         # Run assertions that the model is correctly structured
         self._test_models()
-
+        
         # Reduce models using estimability analysis
         
         if self.use_estimability:
             if use_mixin:
-                parameter_names = self.reduce_models()
+                parameter_names, pe_sets = self.reduce_models()
+                self.pe_sets = pe_sets
                 if len(parameter_names) == 0:
                     print('Cannot use EP on this model, parameter set is empty in reduced models.')
                     self.d_info = copy.copy(d_info)
                     self.d_init = {k: v[0] for k, v in d_info.items()}
                     parameter_names = list(self.d_init.keys())
+                    pe_sets = {k: parameter_names for k in self.models_dict.keys()}
+                    self.pe_sets = pe_sets
                     self.models_dict = self._orig_models
+                    
             else:
                 raise InputError('The required module EstimationMixin is not available')
         
@@ -124,6 +137,10 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         self._add_global_constraints()
         self._prep_models()
 
+        global opt_dict
+        opt_dict = dict()
+        global param_dict
+        param_dict = dict()
 
     def _test_models(self):
         """Sanity check on the input models"""
@@ -208,6 +225,8 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
                 debugging)
                 
         """    
+        global param_dict
+        
         print(iteration_spacer.substitute(iter='NSD Start'))
     
         print(self.d_init)
@@ -251,9 +270,25 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
             self.parameters_opt = {k: results[i] for i, k in enumerate(self.d_init.keys())}
         
         if debug:
-            return results, opt_dict
+            return results, param_dict
         else:
             return results
+        
+    def plot_paths(self):
+        
+        global param_dict
+        
+        df_p = pd.DataFrame(param_dict).T
+        p_max = df_p.max()
+        p_min = df_p.min()
+        df_norm = (df_p-p_min)/(p_max-p_min)
+        
+        for i, k in enumerate(self.parameters_opt.keys()):
+            plt.plot(df_norm.index, df_norm.loc[:,i], label=k)
+        plt.legend()
+        
+        return None
+
     
     def _run_newton_step(self, d_init, models):
         """This runs a basic Newton step algorithm - use a decent alpha!
@@ -351,6 +386,8 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     global parameter_var_name
     global global_param_name
     global parameter_names
+    global pe_sets
+    global param_dict
      
     opt_count += 1      
     options = {'verbose' : False}
@@ -376,6 +413,8 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     for k_model, model in _models.items():
         print(f'Performing inner optimization: {k_model}')
         
+        valid_parameters_scenario = pe_sets[k_model] 
+        print(valid_parameters_scenario)
         valid_parameters = dict(getattr(model, parameter_var_name).items()).keys()
         model_opt = _optimize(model, d_init)
         
@@ -394,10 +433,21 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
             E[i, indx] = 1
       
         S = E.dot(K_i_inv.values).dot(E.T)
+        #print(S)        
+        
         Mi = pd.DataFrame(np.linalg.inv(S), index=valid_parameters, columns=valid_parameters)
+        
+        parameters_not_to_update = set(valid_parameters).difference(set(valid_parameters_scenario))
+        #print(parameters_not_to_update)
+        #print(f'Mi - pre-param drop: {Mi}')
+        #Mi = Mi.drop(index=list(parameters_not_to_update), columns=list(parameters_not_to_update))
+        #print(f'Mi - post: {Mi}')
+       
+        
         M = M.add(Mi).combine_first(M)
         M = M[parameter_names]
         M = M.reindex(parameter_names)
+        #print(f'M: {M}')
         
         for param in m.index:
             if param in duals.keys():
@@ -409,15 +459,20 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         Ei.append(E)
 
     # Save the results in opt_dict - needed for further iterations
+    # Perhaps remove the stored values once a new one has been made?
     opt_dict[opt_count] = { 'd': d_init_list,
-                            'obj': objective_value,
+                          #  'obj': objective_value,
                             'M': M.values,
                             'm': m.values.ravel(),
-                            'S': Si,
-                            'K_inv': Ki,
-                            'E': Ei,
+                          #  'S': Si,
+                          #  'K_inv': Ki,
+                          #  'E': Ei,
                             } 
     
+    param_dict[opt_count] = d_init_list
+    
+    if len(opt_dict) > 1:
+        del opt_dict[opt_count - 1]
     if not generate_gradients:
         return objective_value
     else:
@@ -529,4 +584,5 @@ def _calculate_m(x, scenarios):
         _inner_problem(x, scenarios, generate_gradients=True)
     
     m = opt_dict[opt_count]['m']
-    return m
+    return m    
+    

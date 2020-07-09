@@ -41,10 +41,14 @@ class EstimationMixin():
         for param_set in params_est.values():
             set_of_est_params.update(param_set)
             
+        print(all_param)
+        print(set_of_est_params)
+            
         # Remove the non-estimable parameters from the odes
         for key, model in self.models_dict.items():
     
-            for param in all_param.difference(set(params_est[key])):    
+            #for param in all_param.difference(set(params_est[key])):   
+            for param in all_param.difference(set_of_est_params):   
                 parameter_to_change = param
                 if parameter_to_change in model.P.keys():
                     change_value = [v[0] for p, v in parameters.items() if p == parameter_to_change][0]
@@ -81,8 +85,9 @@ class EstimationMixin():
         
         # The parameter names need to be updated as well
         parameter_names = list(self.d_init.keys())
-                
-        return parameter_names
+        pe_dict = {k: list(v.keys()) for k, v in params_est.items()}
+    
+        return parameter_names, pe_dict
     
     @staticmethod
     def _update_expression(expr, replacement_param, change_value):

@@ -1,9 +1,10 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Created on Tue Jun 16 12:57:47 2020
+Example 18: Nested Schur Decomposition for the CSTR Model
 
-@author: kevin
+Uses three simulated experiments to show how the NSD method can be used to
+combine data collected in different methods into a single parameter fitting
+problem.
+
 """
 import numpy as np
 import pandas as pd
@@ -22,6 +23,9 @@ d_init_guess = {p.name: (p.init, p.bounds) for p in parameters}
 
 # NSD routine
 
+# If there is only one parameter it does not really update - it helps if you
+# let the other infomation "seep in" from the other experiments.
+
 parameter_var_name = 'P'
 options = {
     'method': 'trust-constr',
@@ -29,6 +33,8 @@ options = {
     }
 
 nsd = NSD(models, d_init_guess, parameter_var_name, options)
-results = nsd.nested_schur_decomposition()
+results, od = nsd.nested_schur_decomposition(debug=True)
 
 print(f'\nThe final parameter values are:\n{nsd.parameters_opt}')
+
+nsd.plot_paths()

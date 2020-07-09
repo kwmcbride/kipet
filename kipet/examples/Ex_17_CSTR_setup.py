@@ -274,6 +274,12 @@ def make_model_dict():
         
         X_data['T'] = add_noise_to_signal(X_data['T'], noise['T'])
         builder.add_complementary_states_data(pd.DataFrame(X_data['T']))
+        
+        conc_measurement_index = [7, 57, 99]
+        Z_data = results.Z.iloc[conc_measurement_index, :]
+        Z_data['A'] = add_noise_to_signal(Z_data['A'], noise['A'])
+        builder.add_concentration_data(pd.DataFrame(Z_data))
+        
         model = builder.create_pyomo_model()
         
         return model
@@ -302,7 +308,7 @@ def make_model_dict():
         
         Z_data, X_data, results = simulation_reactor()
         
-        conc_measurement_index = [7, 57, 99]
+        conc_measurement_index = [7, 20, 50, 57, 70, 80, 90, 99, 120, 140]
         Z_data = results.Z.iloc[conc_measurement_index, :]
         Z_data['A'] = add_noise_to_signal(Z_data['A'], noise['A'])
         builder.add_concentration_data(pd.DataFrame(Z_data))
@@ -339,7 +345,7 @@ def make_model_dict():
     """ Discretize and and add an objective function"""
     
     models['Exp-1'] = make_exp_1()
-    models['Exp-2'] = make_exp_2()
+    #models['Exp-2'] = make_exp_2()
     models['Exp-3'] = make_exp_3()
     
     for k, model in models.items():
