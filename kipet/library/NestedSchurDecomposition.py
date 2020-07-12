@@ -109,7 +109,7 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         parameter_names = list(self.d_init.keys())
         
         global pe_sets
-        pe_sets = {}
+        pe_sets = {k: parameter_names for k in self.models_dict.keys()}
         self.pe_sets = pe_sets
     
         # Run assertions that the model is correctly structured
@@ -414,7 +414,7 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         print(f'Performing inner optimization: {k_model}')
         
         valid_parameters_scenario = pe_sets[k_model] 
-        print(valid_parameters_scenario)
+        #print(valid_parameters_scenario)
         valid_parameters = dict(getattr(model, parameter_var_name).items()).keys()
         model_opt = _optimize(model, d_init)
         
