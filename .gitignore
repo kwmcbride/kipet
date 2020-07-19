@@ -98,4 +98,9 @@ ENV/
 /site
 
 # mypy
+
+# Validation Files
+kipet/validation/
+
+
 .mypy_cache/

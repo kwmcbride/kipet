@@ -98,7 +98,7 @@ if __name__ == "__main__":
     
     variances = {'Exp1':sigmas, 'Exp2':sigmas}
     
-    results_pest = pest.run_parameter_estimation(builder = builder,
+    results_pest, models, builders = pest.run_parameter_estimation(builder = builder,
                                                          solver = 'ipopt_sens', 
                                                          tee=False,
                                                          nfe=nfe,

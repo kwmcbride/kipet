@@ -19,7 +19,12 @@ models, parameters = make_model_dict()
 
 # This is still needed and should include the union of all parameters in all
 # models
-d_init_guess = {p.name: (p.init, p.bounds) for p in parameters}
+
+factor = np.random.uniform(low=0.8, high=1.2, size=len(parameters))
+
+d_init_guess = {p.name: (p.init*factor[i], p.bounds) for i, p in enumerate(parameters)}
+#d_init_guess = {p.name: (p.init, p.bounds) for i, p in enumerate(parameters)}
+
 
 # NSD routine
 
@@ -29,12 +34,64 @@ d_init_guess = {p.name: (p.init, p.bounds) for p in parameters}
 parameter_var_name = 'P'
 options = {
     'method': 'trust-constr',
-    'use_est_param': True,      # Use this to reduce model based on EP
+    'use_est_param': True,   # Use this to reduce model based on EP
+    'use_scaling' : True,
+    'cross_updating' : True,
     }
+
+print(d_init_guess)
 
 nsd = NSD(models, d_init_guess, parameter_var_name, options)
 results, od = nsd.nested_schur_decomposition(debug=True)
 
 print(f'\nThe final parameter values are:\n{nsd.parameters_opt}')
 
-nsd.plot_paths()
+#%% For paper - automatic figure and table generation
+
+filedir = '../../../../Documents/Work/CMU Work/NSD/'
+filename = 'CSTR_BR_ESC_80120r' #'CSTR_BR_ESC_fr80-120'
+save_figures = True
+
+def make_param_table(p_dict, filedir, filename):
+    
+    output_table = filedir + filename + '_table.tex'
+    
+    p_tex = {'Cfa': '$C_{A,F}$',
+             'ER' : '$E/R$',
+             'k' : '$k$',
+             'Tfc' : '$T_{C,F}$',
+             'rho' : '$\\rho$',
+             'rhoc' : '$\\rho_C$',
+             'Tf' : '$T_{F}$',
+             'h' : '$h$',
+             'delH' : '$\\Delta H$',
+             }
+    
+    with open(output_table, 'w') as f:
+    
+        f.write('\\begin{table}[h!]\n')
+        f.write('\\begin{center}\n')
+        f.write('\\caption{The CSTR model constants}\n')
+        f.write('\\label{tab:table_cstr_constants}\n')
+        f.write('\\begin{tabular}{c|c}\n')
+        f.write('\\toprule\n')
+        f.write('\\textbf{Constant} & \\textbf{Symbol}\\\\\n')
+        f.write('\\midrule\n')
+        
+        for p, v in p_dict.items():
+        
+            f.write('%s & %0.4f' % (p_tex[p], v))
+            f.write('\\\\\n')
+        
+        f.write('\\bottomrule\n')
+        f.write('\\end{tabular}\n')
+        f.write('\\end{center}\n')
+        f.write('\\end{table}\n')
+
+    return None
+
+if save_figures:
+
+    nsd.plot_paths(filedir + filename)
+    make_param_table(nsd.parameters_opt, filedir, filename)
+

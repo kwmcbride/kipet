@@ -66,3 +66,38 @@ class ScalingVisitor(EXPR.ExpressionReplacementVisitor):
 
         return False, None
     
+# This needs to work for the models and not an instance of whatever this was
+def scale_parameters(self):
+    """If scaling, this multiplies the constants in model.K to each
+    parameter in model.P.
+    
+    I am not sure if this is necessary and will look into its importance.
+    """
+    for k, model in self.models_dict:
+    
+        #if self.model.K is not None:
+        self.scale = {}
+        for i in self.model.P:
+            self.scale[id(self.model.P[i])] = self.model.P[i]
+    
+        for i in self.model.Z:
+            self.scale[id(self.model.Z[i])] = 1
+            
+        for i in self.model.dZdt:
+            self.scale[id(self.model.dZdt[i])] = 1
+            
+        for i in self.model.X:
+            self.scale[id(self.model.X[i])] = 1
+    
+        for i in self.model.dXdt:
+            self.scale[id(self.model.dXdt[i])] = 1
+    
+        for k, v in self.model.odes.items(): 
+            scaled_expr = self.scale_expression(v.body, self.scale)
+            self.model.odes[k] = scaled_expr == 0
+        
+def scale_expression(self, expr, scale):
+    
+    visitor = ScalingVisitor(scale)
+    return visitor.dfs_postorder_stack(expr)
+    

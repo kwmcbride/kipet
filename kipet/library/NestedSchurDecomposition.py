@@ -28,11 +28,16 @@ from pyomo.environ import (
     SolverFactory,
     Suffix,
     )
+from pyomo.environ import *
+from pyomo.core.expr import current as EXPR
 
 from scipy.optimize import (
     Bounds,
     minimize,
     )
+
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import inv as spinv
 
 use_mixin = False
 try:
@@ -55,6 +60,7 @@ global parameter_var_name
 global global_set_name
 global parameter_names
 global pe_sets
+global cross_updating
 
 # If for some reason your model has these attributes, you will have a problem
 global_set_name = 'global_parameter_set'
@@ -101,12 +107,17 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         self.gtol = self._kwargs.pop('gtol', 1e-12)
         self.method = self._kwargs.pop('method', 'trust-constr')
         self.use_estimability = self._kwargs.pop('use_est_param', False)
+        self.use_scaling = self._kwargs.pop('use_scaling', False)
+        self.cross_updating = self._kwargs.pop('cross_updating', True)
         
         global parameter_var_name
         parameter_var_name = param_var_name
         
         global parameter_names
         parameter_names = list(self.d_init.keys())
+        
+        global cross_updating
+        cross_updating = self.cross_updating
         
         global pe_sets
         pe_sets = {k: parameter_names for k in self.models_dict.keys()}
@@ -117,6 +128,7 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         
         # Reduce models using estimability analysis
         
+        self.d_init_unscaled = self.d_init
         if self.use_estimability:
             if use_mixin:
                 parameter_names, pe_sets = self.reduce_models()
@@ -129,9 +141,13 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
                     pe_sets = {k: parameter_names for k in self.models_dict.keys()}
                     self.pe_sets = pe_sets
                     self.models_dict = self._orig_models
-                    
+                self.d_init_unscaled = self.d_init
             else:
                 raise InputError('The required module EstimationMixin is not available')
+        
+        print(f'Before scaling: {self.d_init_unscaled}')
+        if self.use_scaling:
+            self._scale_models()
         
         # Add the global constraints to the model
         self._add_global_constraints()
@@ -212,6 +228,71 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         bounds = Bounds(lower_bounds, upper_bounds, True)
         return bounds
     
+    def _scale_models(self):
+        """Scale the model parameters
+        
+        """
+        models = self.models_dict
+        
+        def scale_parameters(models):
+            """If scaling, this multiplies the constants in model.K to each
+            parameter in model.P.
+            
+            I am not sure if this is necessary and will look into its importance.
+            """
+            for k, model in models.items():
+            
+                #if model.K is not None:
+                scale = {}
+                for i in model.P:
+                    print(model.P[i].value)
+                    scale[id(model.P[i])] = self.d_init[i]
+            
+                for i in model.Z:
+                    scale[id(model.Z[i])] = 1
+                    
+                for i in model.dZdt:
+                    scale[id(model.dZdt[i])] = 1
+                    
+                for i in model.X:
+                    scale[id(model.X[i])] = 1
+            
+                for i in model.dXdt:
+                    scale[id(model.dXdt[i])] = 1
+            
+                for k, v in model.odes.items(): 
+                    scaled_expr = scale_expression(v.body, scale)
+                    model.odes[k] = scaled_expr == 0
+                
+            return models
+        def scale_expression(expr, scale):
+            
+            visitor = ScalingVisitor(scale)
+            return visitor.dfs_postorder_stack(expr)
+        
+        self.models_dict = scale_parameters(models)
+
+        print(self.d_init_unscaled)
+
+        for key, model in self.models_dict.items():
+            rho = 10
+            for k, v in model.P.items():
+                ub = 1.5
+                lb = 0.5
+                model.P[k].setlb(lb)
+                model.P[k].setub(ub)
+                model.P[k].unfix()
+                model.P[k].set_value(1)
+                
+                print(v.value)
+                print(f'LB: {self.d_info[k][1][0]/self.d_init_unscaled[k]}')
+                print(f'UB: {self.d_info[k][1][1]/self.d_init_unscaled[k]}')
+            
+        self.d_info = {k: (1, (0.5, 1.5)) for k, v in self.d_info.items()}
+        self.d_init = {k: v[0] for k, v in self.d_info.items()}
+            
+        return None
+        
     def nested_schur_decomposition(self, debug=False):
         """This is the outer problem controlled by a trust region solver 
         running on scipy. This is the only method that the user needs to 
@@ -246,6 +327,10 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
             jac = _calculate_m
             hess = _calculate_M
             
+            tr_options={
+                'xtol': 1e-08,
+                }
+            
             callback(x0)
             results = minimize(fun, 
                                x0, 
@@ -255,14 +340,9 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
                                hess=hess,
                                callback=callback,
                                bounds=d_bounds,
-                               options=dict(gtol=self.gtol,
-                                       #     verbose=3,
-                                            #maxiter=10,
-                                            #initial_tr_radius=0.1,
-                                            #max_tr_radius=0.1
-                                       ),
+                               options=tr_options,
                            )
-            self.parameters_opt = {k: results.x[i] for i, k in enumerate(self.d_init.keys())}
+            self.parameters_opt = {k: results.x[i]*self.d_init_unscaled[k] for i, k in enumerate(self.d_init.keys())}
             
         if self.method in ['newton']:
             x0 = list(d_init.values())
@@ -274,18 +354,44 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         else:
             return results
         
-    def plot_paths(self):
+    def plot_paths(self, filename):
         
         global param_dict
         
         df_p = pd.DataFrame(param_dict).T
+        print(df_p)
         p_max = df_p.max()
         p_min = df_p.min()
-        df_norm = (df_p-p_min)/(p_max-p_min)
+        
+        df_p = df_p.drop(index=[0])
+        
+        line_options = {
+                        'linewidth' : 3,
+                        'alpha' : 0.8,
+                        'marker':'o',
+                        'markersize' : 4,
+                        }
+        
+        if not self.use_scaling:
+            df_norm = (df_p-p_min)/(p_max-p_min)
+        else:
+            df_norm = df_p
+            # print(df_norm)
+            # for i, row in df_p.iterrows():
+            #     df_norm.iloc[i, :] = df_norm.iloc[i, :]/df_norm.iloc[i, 0]
+        
+        print(df_norm)
+        fig = plt.figure(figsize=(12.0, 8.0)) # in inches!
         
         for i, k in enumerate(self.parameters_opt.keys()):
-            plt.plot(df_norm.index, df_norm.loc[:,i], label=k)
-        plt.legend()
+            plt.plot(df_norm.index, df_norm.loc[:,i], label=k, **line_options)
+        plt.legend(fontsize=20, ncol=5)
+        ax = plt.gca()
+        ax.tick_params(axis = 'both', which = 'major', labelsize = 20)
+        plt.xlabel('Iteration', fontsize=20)
+        plt.ylabel('Scaled Parameter Value', fontsize=20)
+        plt.savefig(filename + '.png', dpi=600)
+
         
         return None
 
@@ -388,7 +494,8 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     global parameter_names
     global pe_sets
     global param_dict
-     
+    global cross_updating 
+    
     opt_count += 1      
     options = {'verbose' : False}
     _models = copy.copy(models) 
@@ -418,6 +525,7 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         valid_parameters = dict(getattr(model, parameter_var_name).items()).keys()
         model_opt = _optimize(model, d_init)
         
+        # Possible speed up here - return sparse instead of df - find location of constraints
         kkt_df, var_ind, con_ind_new = _get_kkt_matrix(model_opt)
         duals = {key: model_opt.dual[getattr(model_opt, global_constraint_name)[key]] for key, val in getattr(model_opt, global_param_name).items()}
         col_ind  = [var_ind.loc[var_ind[0] == f'{parameter_var_name}[{v}]'].index[0] for v in valid_parameters]
@@ -427,6 +535,11 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         # Perform the calculations to get M and m
         K = kkt_df.drop(index=dc, columns=dc)
         E = np.zeros((len(dummy_constraints), K.shape[1]))
+        
+        #Ks = csc_matrix(K.values)
+        #Kinv = spinv(Ks)
+        #K_i_inv = pd.DataFrame(Kinv.todense(), index=K.index, columns=K.columns)
+        
         K_i_inv = pd.DataFrame(np.linalg.inv(K.values), index=K.index, columns=K.columns)
         
         for i, indx in enumerate(col_ind):
@@ -437,11 +550,12 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         
         Mi = pd.DataFrame(np.linalg.inv(S), index=valid_parameters, columns=valid_parameters)
         
-        parameters_not_to_update = set(valid_parameters).difference(set(valid_parameters_scenario))
-        #print(parameters_not_to_update)
-        #print(f'Mi - pre-param drop: {Mi}')
-        #Mi = Mi.drop(index=list(parameters_not_to_update), columns=list(parameters_not_to_update))
-        #print(f'Mi - post: {Mi}')
+        if not cross_updating:
+            parameters_not_to_update = set(valid_parameters).difference(set(valid_parameters_scenario))
+            print(parameters_not_to_update)
+            print(f'Mi - pre-param drop: {Mi}')
+            Mi = Mi.drop(index=list(parameters_not_to_update), columns=list(parameters_not_to_update))
+            print(f'Mi - post: {Mi}')
        
         
         M = M.add(Mi).combine_first(M)
@@ -586,3 +700,28 @@ def _calculate_m(x, scenarios):
     m = opt_dict[opt_count]['m']
     return m    
     
+class ScalingVisitor(EXPR.ExpressionReplacementVisitor):
+
+    def __init__(self, scale):
+        super(ScalingVisitor, self).__init__()
+        self.scale = scale
+
+    def visiting_potential_leaf(self, node):
+      
+        if node.__class__ in native_numeric_types:
+            return True, node
+
+        if node.is_variable_type():
+           
+            return True, self.scale[id(node)]*node
+
+        if isinstance(node, EXPR.LinearExpression):
+            node_ = copy.deepcopy(node)
+            node_.constant = node.constant
+            node_.linear_vars = copy.copy(node.linear_vars)
+            node_.linear_coefs = []
+            for i,v in enumerate(node.linear_vars):
+                node_.linear_coefs.append( node.linear_coefs[i]*self.scale[id(v)] )
+            return True, node_
+
+        return False, None

@@ -145,13 +145,13 @@ def make_model_dict():
             ]
         
     parameters = [
-            KineticParameter('Tf',   (250, 400), 293.15, 0.09),
+            KineticParameter('Tf',   (283.15, 400), 293.15, 0.09),
             KineticParameter('Cfa',  (0, 5000), 2500, 0.01),
             KineticParameter('rho',  (100, 2000), 1025, 0.01),
             KineticParameter('delH', (0.0, 400), 160, 0.01),
             KineticParameter('ER',   (0.0, 5000), 255, 0.01),
             KineticParameter('k',    (0.0, 10), 2.5, 0.01),
-            KineticParameter('Tfc',  (250, 400), 283.15, 0.01),
+            KineticParameter('Tfc',  (283.15, 300), 283.15, 0.01),
             KineticParameter('rhoc', (0.0, 2000), 1000, 0.01),
             KineticParameter('h',    (0.0, 5000), 3600, 0.01),
             ]
@@ -171,8 +171,8 @@ def make_model_dict():
     C = constants
     
     noise = {
-            'A' : 0.01,
-            'T' : 0.25,
+            'A' : 1, #0.01,
+            'T' : 1, #0.25,
             }
     
     def simulation_reactor():
@@ -228,7 +228,7 @@ def make_model_dict():
                 builder.add_parameter(param.name, param.init*factor)
     
         builder.set_odes_rule(rule_odes_conc)
-        times = (0.0, 5.0)
+        times = (0.0, 2.0)
         builder.set_model_times(times)
         pyomo_model = builder.create_pyomo_model()
         simulator = PyomoSimulator(pyomo_model)
@@ -272,12 +272,12 @@ def make_model_dict():
         builder.set_model_times(times)
         Z_data, X_data, results = simulation_reactor()
         
-        X_data['T'] = add_noise_to_signal(X_data['T'], noise['T'])
+        #X_data['T'] = add_noise_to_signal(X_data['T'], noise['T'])
         builder.add_complementary_states_data(pd.DataFrame(X_data['T']))
         
         conc_measurement_index = [7, 57, 99]
         Z_data = results.Z.iloc[conc_measurement_index, :]
-        Z_data['A'] = add_noise_to_signal(Z_data['A'], noise['A'])
+        #Z_data['A'] = add_noise_to_signal(Z_data['A'], noise['A'])
         builder.add_concentration_data(pd.DataFrame(Z_data))
         
         model = builder.create_pyomo_model()
@@ -333,10 +333,10 @@ def make_model_dict():
             if param.name in ['k', 'ER']:
                 builder.add_parameter(param.name, bounds=param.bounds, init=param.init*factor)
        
-        times = (0.0, 5.0)
+        times = (0.0, 2.0)
         builder.set_model_times(times)
         Z_data = simulation_lab_reaction()
-        Z_data['A'] = add_noise_to_signal(Z_data['A'], 0.01)
+        #Z_data['A'] = add_noise_to_signal(Z_data['A'], 0.01)
         builder.add_concentration_data(pd.DataFrame(Z_data))
         model = builder.create_pyomo_model()
         

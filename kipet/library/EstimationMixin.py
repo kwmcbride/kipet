@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from kipet.library.EstimationPotential import EstimationPotential as EP
-from kipet.library.VisitorMixins import ReplacementVisitor
+from kipet.library.VisitorMixins import ReplacementVisitor, ScalingVisitor
 
 global parameter_names
 
@@ -36,6 +36,7 @@ class EstimationMixin():
             
             est_param = EP(model, simulation_data=None, options=options)
             params_est[name] = est_param.estimate()
+            est_param.model.K.display()
         
         # Add model's estimable parameters to global set
         for param_set in params_est.values():
@@ -43,12 +44,17 @@ class EstimationMixin():
             
         print(all_param)
         print(set_of_est_params)
-            
+        
         # Remove the non-estimable parameters from the odes
         for key, model in self.models_dict.items():
     
-            #for param in all_param.difference(set(params_est[key])):   
-            for param in all_param.difference(set_of_est_params):   
+            #if self.cross_updating:
+            update_set = set_of_est_params
+            #else:
+            #    update_set = set(params_est[key])
+    
+            for param in all_param.difference(update_set):   
+            #for param in all_param.difference(set_of_est_params):   
                 parameter_to_change = param
                 if parameter_to_change in model.P.keys():
                     change_value = [v[0] for p, v in parameters.items() if p == parameter_to_change][0]
@@ -82,6 +88,8 @@ class EstimationMixin():
         
         self.d_info = d_init_guess
         self.d_init = {k: v[0] for k, v in d_init_guess.items()}
+        
+        print(self.d_init)
         
         # The parameter names need to be updated as well
         parameter_names = list(self.d_init.keys())
