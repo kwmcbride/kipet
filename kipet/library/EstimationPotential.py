@@ -902,15 +902,12 @@ def reduce_models(models_dict_provided,
           'Tfc': (262.9381531048641, (250, 400))}}
     
     """
-    print(models_dict_provided)
     if not isinstance(models_dict_provided, dict):
         try:
             models_dict_provided = [models_dict_provided]
             models_dict_provided = {f'model_{i + 1}': model for i, model in enumerate(models_dict_provided)}
         except:
             raise ValueError('You passed something other than a model or a dict of models')
-    
-    print(models_dict_provided)
     
     list_of_methods = ['reduced_hessian']
     
