@@ -144,6 +144,7 @@ class PyomoSimulator(Simulator):
             scaled_expr = self.scale_expression(v.body, self.scale)
             self.model.odes[k] = scaled_expr == 0
             
+            
     def scale_expression(self, expr, scale):
         
         visitor = ScalingVisitor(scale)

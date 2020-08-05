@@ -235,7 +235,7 @@ def make_model_dict():
         Z_data, X_data, results = run_simulation(simulator)
         
         # Some random measurement locations
-        conc_measurement_index = [5, 30, 65]
+        conc_measurement_index = [1, 2]
         Z_data = results.Z.iloc[conc_measurement_index, :]
         
         return Z_data

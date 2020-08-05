@@ -190,7 +190,7 @@ if __name__ == "__main__":
     options = {
         'verbose' : True,
                }
-    
+    #%%
     # Declare the EsimationPotential instance
     est_param = EstimationPotential(model, simulation_data=results, options=options)
     # Call the estimate() method to start the algorithm

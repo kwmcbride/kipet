@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from kipet.library.EstimationPotential import EstimationPotential as EP
-from kipet.library.VisitorMixins import ReplacementVisitor, ScalingVisitor
+from kipet.library.VisitorMixins import ReplacementVisitor
 
 global parameter_names
 

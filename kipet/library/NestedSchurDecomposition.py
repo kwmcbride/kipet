@@ -10,6 +10,8 @@ not necessary to run full models.
 
 Author: Kevin McBride 2020
 
+# This is the standalone version...how to integrate into Kipet as a mixin?
+
 """
 import copy
 from string import Template
@@ -39,13 +41,6 @@ from scipy.optimize import (
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import inv as spinv
 
-use_mixin = False
-try:
-    from kipet.library.EstimationMixin import EstimationMixin
-    use_mixin = True
-except:
-    print('Kipet libraries not found, estimation potential will not be possible')
-
 global opt_dict
 opt_dict = dict()
 global opt_count
@@ -61,6 +56,8 @@ global global_set_name
 global parameter_names
 global pe_sets
 global cross_updating
+global Q_value
+global use_conditioning
 
 # If for some reason your model has these attributes, you will have a problem
 global_set_name = 'global_parameter_set'
@@ -70,7 +67,7 @@ global_constraint_name = 'fix_params_to_global_nsd_constraint'
 # Header template
 iteration_spacer = Template('\n' + '#'*30 + ' $iter ' + '#'*30 + '\n')
 
-class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
+class NestedSchurDecomposition(object):
     
     """Nested Schur Decomposition approach to parameter fitting using multiple
     experiments
@@ -109,6 +106,8 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         self.use_estimability = self._kwargs.pop('use_est_param', False)
         self.use_scaling = self._kwargs.pop('use_scaling', False)
         self.cross_updating = self._kwargs.pop('cross_updating', True)
+        self.conditioning = self._kwargs.pop('conditioning', False)
+        self.conditioning_Q = self._kwargs.pop('conditioning_Q', 50)
         
         global parameter_var_name
         parameter_var_name = param_var_name
@@ -126,25 +125,7 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         # Run assertions that the model is correctly structured
         self._test_models()
         
-        # Reduce models using estimability analysis
-        
         self.d_init_unscaled = self.d_init
-        if self.use_estimability:
-            if use_mixin:
-                parameter_names, pe_sets = self.reduce_models()
-                self.pe_sets = pe_sets
-                if len(parameter_names) == 0:
-                    print('Cannot use EP on this model, parameter set is empty in reduced models.')
-                    self.d_info = copy.copy(d_info)
-                    self.d_init = {k: v[0] for k, v in d_info.items()}
-                    parameter_names = list(self.d_init.keys())
-                    pe_sets = {k: parameter_names for k in self.models_dict.keys()}
-                    self.pe_sets = pe_sets
-                    self.models_dict = self._orig_models
-                self.d_init_unscaled = self.d_init
-            else:
-                raise InputError('The required module EstimationMixin is not available')
-        
         print(f'Before scaling: {self.d_init_unscaled}')
         if self.use_scaling:
             self._scale_models()
@@ -152,6 +133,16 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
         # Add the global constraints to the model
         self._add_global_constraints()
         self._prep_models()
+
+        global use_conditioning
+        use_conditioning = False
+        # Q
+        if self.conditioning:
+            self._add_condition_terms()
+            use_conditioning = True
+
+        global Q_value
+        Q_value = self.conditioning_Q
 
         global opt_dict
         opt_dict = dict()
@@ -196,6 +187,18 @@ class NestedSchurDecomposition(EstimationMixin if use_mixin else object):
                 
             setattr(model, global_constraint_name, 
             Constraint(getattr(model, global_set_name), rule=rule_fix_global_parameters))
+        
+    def _add_condition_terms(self):
+        
+        global global_param_name
+        
+        for model in self.models_dict.values():
+            for key, param in model.P.items():
+            
+                Q_term = self.conditioning_Q*(model.P[key] - getattr(model, global_param_name)[key])**2
+                model.objective.expr += Q_term
+                
+        return None
         
     def _prep_models(self):
         """Prepare the model suffixes for NSD algorithm.
@@ -494,7 +497,9 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     global parameter_names
     global pe_sets
     global param_dict
-    global cross_updating 
+    global cross_updating
+    global Q_value
+    global use_conditioning
     
     opt_count += 1      
     options = {'verbose' : False}
@@ -532,23 +537,65 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         dummy_constraints = _get_dummy_constraints(model_opt)
         dc = [d for d in dummy_constraints]
         
+        
+        use_SOLE = True
+        
         # Perform the calculations to get M and m
         K = kkt_df.drop(index=dc, columns=dc)
         E = np.zeros((len(dummy_constraints), K.shape[1]))
         
-        #Ks = csc_matrix(K.values)
-        #Kinv = spinv(Ks)
-        #K_i_inv = pd.DataFrame(Kinv.todense(), index=K.index, columns=K.columns)
-        
-        K_i_inv = pd.DataFrame(np.linalg.inv(K.values), index=K.index, columns=K.columns)
-        
         for i, indx in enumerate(col_ind):
             E[i, indx] = 1
       
-        S = E.dot(K_i_inv.values).dot(E.T)
-        #print(S)        
+        # Get S inverse
+        if not use_SOLE:
+          
+            print('Solve using np.linalg.inv to invert KKT matrix')  
+          
+            K_i_inv = pd.DataFrame(np.linalg.inv(K.values), index=K.index, columns=K.columns)
+            P = E.dot(K_i_inv.values).dot(E.T)
+            Si = np.linalg.inv(P)
+      
+        elif use_SOLE and not use_conditioning:
+            
+            print('Solve as system of linear equations')
+            # Make square matrix (A) of Eq. 14
+            top = (K, E.T)
+            bot = (E, np.zeros((len(dummy_constraints), len(dummy_constraints))))
         
-        Mi = pd.DataFrame(np.linalg.inv(S), index=valid_parameters, columns=valid_parameters)
+            top = np.hstack(top)
+            bot = np.hstack(bot)
+            A = np.vstack((top, bot))
+        
+            # Make the rhs (b) of Eq. 14
+            b = np.vstack((np.zeros((K.shape[0], len(dummy_constraints))), -1*np.eye(len(dummy_constraints))))
+        
+            # Solve for Qi and Si
+            rhs = np.linalg.solve(A,b)
+            Si = rhs[-rhs.shape[1]:, :]
+        
+        elif use_SOLE and use_conditioning:
+            
+            print('Solve as system of linear equations using conditioning')
+            
+            # Make square matrix (A) of Eq. 16 to solve for P_inv
+            top = (K, E.T)
+            bot = (E, np.zeros((len(dummy_constraints), len(dummy_constraints))))
+        
+            top = np.hstack(top)
+            bot = np.hstack(bot)
+            A = np.vstack((top, bot))
+        
+            # Make the rhs (b) of Eq. 16 - this is R1 = 0, R2 = -I, as above
+            b = np.vstack((np.zeros((K.shape[0], len(dummy_constraints))), -1*np.eye(len(dummy_constraints))))
+        
+            # Solve for Qi and Si
+            rhs = np.linalg.solve(A,b)
+            P_inv = rhs[-rhs.shape[1]:, :]
+            Si = P_inv
+            Si -= Q_value*np.eye(Si.shape[0])
+        
+        Mi = pd.DataFrame(Si, index=valid_parameters, columns=valid_parameters)
         
         if not cross_updating:
             parameters_not_to_update = set(valid_parameters).difference(set(valid_parameters_scenario))
@@ -557,30 +604,24 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
             Mi = Mi.drop(index=list(parameters_not_to_update), columns=list(parameters_not_to_update))
             print(f'Mi - post: {Mi}')
        
-        
         M = M.add(Mi).combine_first(M)
         M = M[parameter_names]
         M = M.reindex(parameter_names)
         #print(f'M: {M}')
+        eig, u = np.linalg.eigh(M)
+        condition = max(abs(eig))/min(abs(eig))        
+        print(f'M conditioning: {condition}')
         
         for param in m.index:
             if param in duals.keys():
                 m.loc[param] = m.loc[param] + duals[param]
         
         objective_value += model_opt.objective.expr()
-        Si.append(S)
-        Ki.append(K_i_inv)
-        Ei.append(E)
-
-    # Save the results in opt_dict - needed for further iterations
-    # Perhaps remove the stored values once a new one has been made?
+   
     opt_dict[opt_count] = { 'd': d_init_list,
                           #  'obj': objective_value,
                             'M': M.values,
                             'm': m.values.ravel(),
-                          #  'S': Si,
-                          #  'K_inv': Ki,
-                          #  'E': Ei,
                             } 
     
     param_dict[opt_count] = d_init_list

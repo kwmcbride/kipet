@@ -608,7 +608,6 @@ class TemplateBuilder(object):
             None
 
         """
-        print(data)
         self._add_state_data(data,
                              data_type='concentration',
                              overwrite=overwrite)
@@ -1197,8 +1196,12 @@ class TemplateBuilder(object):
 
         # set bounds P
         for k, v in self._parameters_bounds.items():
-            lb = v[0]
-            ub = v[1]
+            factor = 1
+            if self._scale_parameters:
+                factor = self._parameters_init[k]
+            
+            lb = v[0]/factor
+            ub = v[1]/factor
             pyomo_model.P[k].setlb(lb)
             pyomo_model.P[k].setub(ub)
 

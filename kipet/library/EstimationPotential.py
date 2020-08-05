@@ -30,6 +30,7 @@ from kipet.library.common.read_write_tools import df_from_pyomo_data
 from kipet.library.ParameterEstimator import ParameterEstimator
 from kipet.library.PyomoSimulator import PyomoSimulator
 from kipet.library.TemplateBuilder import TemplateBuilder
+from kipet.library.VisitorMixins import ReplacementVisitor
 from kipet.library.common.objectives import (
     conc_objective,
     comp_objective,
@@ -566,12 +567,14 @@ class EstimationPotential():
         
         """
         obj = 0
-        #if model.mixture_components & model.measured_data:
-        obj += conc_objective(model) 
-        #if model.complementary_states & model.measured_data:
-        obj += comp_objective(model)
-        # obj += conc_objective(model)
-        #obj += comp_objective(model)  
+        # This can be cleaned up
+        for k in model.mixture_components & model.measured_data:
+            for t, v in model.C.items():
+                obj += 0.5*(model.C[t] - model.Z[t]) ** 2 / model.sigma[k]**2
+        
+        for k in model.complementary_states & model.measured_data:
+            for t, v in model.U.items():
+                obj += 0.5*(model.X[t] - model.U[t]) ** 2 / model.sigma[k]**2      
     
         return Objective(expr=obj)
    
@@ -858,3 +861,142 @@ class EstimationPotential():
         df_U_update.loc[pivot['r'], pivot['c']] = 1
         
         return df_U_update
+    
+# In the future, I will consolidate the model reduction methods and control
+# using this function
+
+def reduce_models(models_dict_provided,
+                  parameter_dict=None,
+                  method='reduced_hessian',
+                  simulation_data=None,
+                  provide_initial_parameters=True
+                  ):
+    """Uses the EstimationPotential module to find out which parameters
+    can be estimated using each experiment and reduces the model
+    accordingly
+    
+    """
+    list_of_methods = ['reduced_hessian']
+    
+    if method not in list_of_methods:
+        raise ValueError(f'The model reduction method must be one of the following: {", ".join(list_of_methods)}')
+    
+    
+    if method == 'reduced_hessian':
+        if parameter_dict is None:
+            raise ValueError('The reduced Hessian parameter selection method requires initial parameter values')
+        
+    models_dict = copy.deepcopy(models_dict_provided)
+    parameters = parameter_dict
+    
+    all_param = set()
+    all_param.update(p for p in parameters.keys())
+    
+    options = {
+            'verbose' : False,
+                    }
+    
+    # Loop through to perform EP on each model
+    params_est = {}
+    set_of_est_params = set()
+    for name, model in models_dict.items():
+        
+        if method == 'reduced_hessian':
+            print(f'Starting EP analysis of {name}')
+            # This should be with a generic method - pass as an option
+            est_param = EstimationPotential(model, simulation_data=simulation_data, options=options)
+            params_est[name] = est_param.estimate()
+            est_param.model.K.display()
+    
+    # Add model's estimable parameters to global set
+    for param_set in params_est.values():
+        set_of_est_params.update(param_set)
+        
+    print(all_param)
+    print(set_of_est_params)
+    
+    models_dict_reduced = {}
+    
+    # Remove the non-estimable parameters from the odes
+    for key, model in models_dict.items():
+
+        #if self.cross_updating:
+        update_set = set_of_est_params
+        #else:
+        #    update_set = set(params_est[key])
+
+        for param in all_param.difference(update_set):   
+        #for param in all_param.difference(set_of_est_params):   
+            parameter_to_change = param
+            if parameter_to_change in model.P.keys():
+                change_value = [v[0] for p, v in parameters.items() if p == parameter_to_change][0]
+            
+                for k, v in model.odes.items(): 
+                    ep_updated_expr = _update_expression(v.body, model.P[parameter_to_change], change_value)
+                    model.odes[k] = ep_updated_expr == 0
+        
+                model.parameter_names.remove(param)
+                del model.P[param]
+    
+        models_dict_reduced[key] = model
+
+    # Calculate initial values based on averages of EP output
+    initial_values = pd.DataFrame(np.zeros((len(models_dict), len(set_of_est_params))), index=models_dict.keys(), columns=list(set_of_est_params))
+
+    for exp, param_data in params_est.items(): 
+        for param in param_data:
+            initial_values.loc[exp, param] = param_data[param]
+    
+    dividers = dict(zip(initial_values.columns, np.count_nonzero(initial_values, axis=0)))
+    
+    init_val_sum = initial_values.sum()
+    
+    for param in dividers.keys():
+        init_val_sum.loc[param] = init_val_sum.loc[param]/dividers[param]
+    
+    init_vals = init_val_sum.to_dict()
+    init_bounds = {p: parameters[p][1] for p in parameters.keys() if p in set_of_est_params}
+    
+    # Redeclare the d_init_guess values using the new values provided by EP
+    d_init_guess = {p: (init_vals[p], init_bounds[p]) for p in init_bounds.keys()}
+    
+    new_parameter_data = d_init_guess
+    new_initial_values = {k: v[0] for k, v in new_parameter_data.items()}
+    
+    print(new_initial_values)
+    
+    # The parameter names need to be updated as well
+    parameter_names = list(new_initial_values.keys())
+    pe_dict = {k: list(v.keys()) for k, v in params_est.items()}
+    
+    parameter_data = {
+        'names' : parameter_names,
+        'esp_params_model': pe_dict,
+        'initial_values': new_parameter_data,
+        }
+
+    return models_dict_reduced, parameter_data
+
+
+def _update_expression(expr, replacement_param, change_value):
+    """Takes the non-estiambale parameter and replaces it with its intitial
+    value
+    
+    Args:
+        expr (pyomo constraint expr): the target ode constraint
+        
+        replacement_param (str): the non-estimable parameter to replace
+        
+        change_value (float): initial value for the above parameter
+        
+    Returns:
+        new_expr (pyomo constraint expr): updated constraints with the
+            desired parameter replaced with a float
+    
+    """
+    visitor = ReplacementVisitor()
+    visitor.change_replacement(change_value)
+    visitor.change_suspect(id(replacement_param))
+    new_expr = visitor.dfs_postorder_stack(expr)
+    
+    return new_expr
