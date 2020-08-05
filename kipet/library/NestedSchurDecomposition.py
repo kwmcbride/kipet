@@ -38,9 +38,6 @@ from scipy.optimize import (
     minimize,
     )
 
-from scipy.sparse import csc_matrix
-from scipy.sparse.linalg import inv as spinv
-
 global opt_dict
 opt_dict = dict()
 global opt_count
@@ -104,7 +101,7 @@ class NestedSchurDecomposition(object):
         self.gtol = self._kwargs.pop('gtol', 1e-12)
         self.method = self._kwargs.pop('method', 'trust-constr')
         self.use_estimability = self._kwargs.pop('use_est_param', False)
-        self.use_scaling = self._kwargs.pop('use_scaling', False)
+        self.use_scaling = self._kwargs.pop('use_scaling', True)
         self.cross_updating = self._kwargs.pop('cross_updating', True)
         self.conditioning = self._kwargs.pop('conditioning', False)
         self.conditioning_Q = self._kwargs.pop('conditioning_Q', 50)
@@ -126,7 +123,6 @@ class NestedSchurDecomposition(object):
         self._test_models()
         
         self.d_init_unscaled = self.d_init
-        print(f'Before scaling: {self.d_init_unscaled}')
         if self.use_scaling:
             self._scale_models()
         
@@ -248,7 +244,6 @@ class NestedSchurDecomposition(object):
                 #if model.K is not None:
                 scale = {}
                 for i in model.P:
-                    print(model.P[i].value)
                     scale[id(model.P[i])] = self.d_init[i]
             
                 for i in model.Z:
@@ -275,8 +270,6 @@ class NestedSchurDecomposition(object):
         
         self.models_dict = scale_parameters(models)
 
-        print(self.d_init_unscaled)
-
         for key, model in self.models_dict.items():
             rho = 10
             for k, v in model.P.items():
@@ -287,9 +280,9 @@ class NestedSchurDecomposition(object):
                 model.P[k].unfix()
                 model.P[k].set_value(1)
                 
-                print(v.value)
-                print(f'LB: {self.d_info[k][1][0]/self.d_init_unscaled[k]}')
-                print(f'UB: {self.d_info[k][1][1]/self.d_init_unscaled[k]}')
+                # print(v.value)
+                # print(f'LB: {self.d_info[k][1][0]/self.d_init_unscaled[k]}')
+                # print(f'UB: {self.d_info[k][1][1]/self.d_init_unscaled[k]}')
             
         self.d_info = {k: (1, (0.5, 1.5)) for k, v in self.d_info.items()}
         self.d_init = {k: v[0] for k, v in self.d_info.items()}
@@ -505,6 +498,9 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     options = {'verbose' : False}
     _models = copy.copy(models) 
     
+    verbose = False
+    
+    
     Si = []
     Ki = []
     Ei = []
@@ -517,13 +513,17 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     
     if opt_count == 0:
         print(iteration_spacer.substitute(iter=f'Inner Problem Initialization'))
-        print(f'Initial parameter set: {d_init}')
+        if verbose:
+            print(f'Initial parameter set: {d_init}')
     else:
-        print(iteration_spacer.substitute(iter=f'Inner Problem {opt_count}'))
-        print(f'Current parameter set: {d_init}')
+        
+        if verbose:
+            print(iteration_spacer.substitute(iter=f'Inner Problem {opt_count}'))
+            print(f'Current parameter set: {d_init}')
     
     for k_model, model in _models.items():
-        print(f'Performing inner optimization: {k_model}')
+        if verbose:
+            print(f'Performing inner optimization: {k_model}')
         
         valid_parameters_scenario = pe_sets[k_model] 
         #print(valid_parameters_scenario)
@@ -550,15 +550,13 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         # Get S inverse
         if not use_SOLE:
           
-            print('Solve using np.linalg.inv to invert KKT matrix')  
-          
+            # Solve by inverting matrices using np.linalg.inv
             K_i_inv = pd.DataFrame(np.linalg.inv(K.values), index=K.index, columns=K.columns)
             P = E.dot(K_i_inv.values).dot(E.T)
             Si = np.linalg.inv(P)
       
         elif use_SOLE and not use_conditioning:
             
-            print('Solve as system of linear equations')
             # Make square matrix (A) of Eq. 14
             top = (K, E.T)
             bot = (E, np.zeros((len(dummy_constraints), len(dummy_constraints))))
@@ -575,8 +573,6 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
             Si = rhs[-rhs.shape[1]:, :]
         
         elif use_SOLE and use_conditioning:
-            
-            print('Solve as system of linear equations using conditioning')
             
             # Make square matrix (A) of Eq. 16 to solve for P_inv
             top = (K, E.T)
@@ -599,18 +595,15 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         
         if not cross_updating:
             parameters_not_to_update = set(valid_parameters).difference(set(valid_parameters_scenario))
-            print(parameters_not_to_update)
-            print(f'Mi - pre-param drop: {Mi}')
             Mi = Mi.drop(index=list(parameters_not_to_update), columns=list(parameters_not_to_update))
-            print(f'Mi - post: {Mi}')
        
         M = M.add(Mi).combine_first(M)
         M = M[parameter_names]
         M = M.reindex(parameter_names)
-        #print(f'M: {M}')
         eig, u = np.linalg.eigh(M)
-        condition = max(abs(eig))/min(abs(eig))        
-        print(f'M conditioning: {condition}')
+        condition = max(abs(eig))/min(abs(eig))      
+        if verbose:
+            print(f'M conditioning: {condition}')
         
         for param in m.index:
             if param in duals.keys():
@@ -618,8 +611,18 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
         
         objective_value += model_opt.objective.expr()
    
+
+    if divmod(opt_count, 10)[1] == 0:
+        print('\nIteration\t\tObjective\t\t\tAbs Diff\n')
+    if opt_count <= 1:
+        obj_diff = 0
+    else:
+        obj_diff = objective_value - opt_dict[opt_count-1]['obj']
+    
+    if opt_count > 0:
+        print(f'{opt_count}\t\t\t\t{objective_value:e}\t\t{abs(obj_diff):e}') 
     opt_dict[opt_count] = { 'd': d_init_list,
-                          #  'obj': objective_value,
+                            'obj': objective_value,
                             'M': M.values,
                             'm': m.values.ravel(),
                             } 

@@ -7,7 +7,6 @@ from pyomo.environ import *
 from kipet.library.ResultsObject import *
 from kipet.library.Simulator import *
 from kipet.library.common.VisitorClasses import ScalingVisitor
-
     
 class PyomoSimulator(Simulator):
     """Simulator based on pyomo.dae discretization strategies.

@@ -45,8 +45,6 @@ parameter_var_name = 'P'
 # Other options should be placed in a dict:
 options = {
     'method': 'trust-constr',
-    'use_scaling' : True,
-    'cross_updating' : True,
     'conditioning' : False,
     'conditioning_Q': 10,
     }

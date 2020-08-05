@@ -938,7 +938,6 @@ def reduce_models(models_dict_provided,
             print(f'Starting EP analysis of {name}')
             est_param = EstimationPotential(model, simulation_data=simulation_data, options=options)
             params_est[name] = est_param.estimate()
-            est_param.model.K.display()
     
     # Add model's estimable parameters to global set
     for param_set in params_est.values():
