@@ -862,20 +862,56 @@ class EstimationPotential():
         
         return df_U_update
     
-# In the future, I will consolidate the model reduction methods and control
-# using this function
-
 def reduce_models(models_dict_provided,
                   parameter_dict=None,
                   method='reduced_hessian',
                   simulation_data=None,
-                  provide_initial_parameters=True
                   ):
     """Uses the EstimationPotential module to find out which parameters
     can be estimated using each experiment and reduces the model
     accordingly
     
+    This can take a single model or a dict of models. It then proceeds to 
+    find the global set of estimable parameters as well. These are returned
+    in the parameter dict that contains the names of the global set, the
+    model specific parameter sets, and a dict of parameter initial values and
+    bounds that can be used in further methods.
+    
+    Args:
+        models_dict_provided (dict): model or dict of models
+        
+        parameter_dict (dict): parameters and their initial values
+        
+        method (str): model reduction method
+        
+        simulation_data (pd.DataFrame): simulation data used for a warmstart
+        
+    Returns:
+        models_dict_reduced (dict): dict of reduced models
+        
+        parameter_data (dict): parameter data that may be useful
+        
+        Example:
+            
+        {'names': ['Cfa', 'rho', 'ER', 'k', 'Tfc'],
+         'esp_params_model': {'model_1': ['Cfa', 'Tfc', 'ER', 'rho', 'k']},
+         'initial_values': {'Cfa': (2490.7798699208106, (0, 5000)),
+          'rho': (1335.058139853457, (800, 2000)),
+          'ER': (253.78019656674874, (0.0, 500)),
+          'k': (2.4789686423018376, (0.0, 10)),
+          'Tfc': (262.9381531048641, (250, 400))}}
+    
     """
+    print(models_dict_provided)
+    if not isinstance(models_dict_provided, dict):
+        try:
+            models_dict_provided = [models_dict_provided]
+            models_dict_provided = {f'model_{i + 1}': model for i, model in enumerate(models_dict_provided)}
+        except:
+            raise ValueError('You passed something other than a model or a dict of models')
+    
+    print(models_dict_provided)
+    
     list_of_methods = ['reduced_hessian']
     
     if method not in list_of_methods:
@@ -903,7 +939,6 @@ def reduce_models(models_dict_provided,
         
         if method == 'reduced_hessian':
             print(f'Starting EP analysis of {name}')
-            # This should be with a generic method - pass as an option
             est_param = EstimationPotential(model, simulation_data=simulation_data, options=options)
             params_est[name] = est_param.estimate()
             est_param.model.K.display()
@@ -911,9 +946,6 @@ def reduce_models(models_dict_provided,
     # Add model's estimable parameters to global set
     for param_set in params_est.values():
         set_of_est_params.update(param_set)
-        
-    print(all_param)
-    print(set_of_est_params)
     
     models_dict_reduced = {}
     
@@ -962,8 +994,6 @@ def reduce_models(models_dict_provided,
     
     new_parameter_data = d_init_guess
     new_initial_values = {k: v[0] for k, v in new_parameter_data.items()}
-    
-    print(new_initial_values)
     
     # The parameter names need to be updated as well
     parameter_names = list(new_initial_values.keys())

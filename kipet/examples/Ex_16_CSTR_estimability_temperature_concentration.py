@@ -17,7 +17,7 @@ import pandas as pd
 import pyomo.core as pyomo
 
 from kipet.library.data_tools import add_noise_to_signal
-from kipet.library.EstimationPotential import EstimationPotential
+from kipet.library.EstimationPotential import EstimationPotential, reduce_models
 from kipet.library.PyomoSimulator import PyomoSimulator
 from kipet.library.TemplateBuilder import (
         TemplateBuilder,
@@ -190,10 +190,17 @@ if __name__ == "__main__":
     options = {
         'verbose' : True,
                }
-    #%%
-    # Declare the EsimationPotential instance
+    
+    #Declare the EsimationPotential instance
     est_param = EstimationPotential(model, simulation_data=results, options=options)
-    # Call the estimate() method to start the algorithm
+    #Call the estimate() method to start the algorithm
     est_param.estimate()
-    # Optional plotting of the experimental data against the fitted models
+    #Optional plotting of the experimental data against the fitted models
     est_param.plot_results()
+   
+  #%%
+    # Alternatively, you can pass the model and the parameter dict to the method
+    # reduce_models contained within the EstimationModule
+
+   # d_init_guess = {p.name: (p.init*factor, p.bounds) for i, p in enumerate(parameters)}    
+   # models, param_dict = reduce_models(model, d_init_guess)

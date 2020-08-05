@@ -33,10 +33,10 @@ d_init_guess = {p.name: (p.init*factor[i], p.bounds) for i, p in enumerate(param
 
 # If using KIPET, the models may be reduced (recommended)
 # The routine in EstimationPotential can now be called using reduce_models:
-#models, param_data = reduce_models(models, parameter_dict=d_init_guess) 
+models, param_data = reduce_models(models, parameter_dict=d_init_guess) 
 
 # Update the initial parameter values using the averages from model reduction:
-#d_init_guess = param_data['initial_values']
+d_init_guess = param_data['initial_values']
 
 # NSD - First declare options
 # This is important - the name of the global parameter set:
