@@ -945,16 +945,14 @@ def reduce_models(models_dict_provided,
     
     models_dict_reduced = {}
     
+    # How does this look with MP?
+
     # Remove the non-estimable parameters from the odes
     for key, model in models_dict.items():
 
-        #if self.cross_updating:
         update_set = set_of_est_params
-        #else:
-        #    update_set = set(params_est[key])
 
         for param in all_param.difference(update_set):   
-        #for param in all_param.difference(set_of_est_params):   
             parameter_to_change = param
             if parameter_to_change in model.P.keys():
                 change_value = [v[0] for p, v in parameters.items() if p == parameter_to_change][0]

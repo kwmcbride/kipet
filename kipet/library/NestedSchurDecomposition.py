@@ -14,11 +14,13 @@ Author: Kevin McBride 2020
 
 """
 import copy
+import psutil
 from string import Template
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pathos
 from pyomo.contrib.pynumero.interfaces.pyomo_nlp import PyomoNLP
 from pyomo.core.base.PyomoModel import ConcreteModel
 
@@ -55,6 +57,7 @@ global pe_sets
 global cross_updating
 global Q_value
 global use_conditioning
+global use_mp
 
 # If for some reason your model has these attributes, you will have a problem
 global_set_name = 'global_parameter_set'
@@ -63,6 +66,10 @@ global_constraint_name = 'fix_params_to_global_nsd_constraint'
 
 # Header template
 iteration_spacer = Template('\n' + '#'*30 + ' $iter ' + '#'*30 + '\n')
+
+# Set up multiprocessing
+mp = pathos.helpers.mp
+num_cpus = psutil.cpu_count(logical=False)
 
 class NestedSchurDecomposition(object):
     
@@ -105,6 +112,7 @@ class NestedSchurDecomposition(object):
         self.cross_updating = self._kwargs.pop('cross_updating', True)
         self.conditioning = self._kwargs.pop('conditioning', False)
         self.conditioning_Q = self._kwargs.pop('conditioning_Q', 50)
+        self.use_mp = self._kwargs.pop('use_mp', False)
         
         global parameter_var_name
         parameter_var_name = param_var_name
@@ -144,6 +152,9 @@ class NestedSchurDecomposition(object):
         opt_dict = dict()
         global param_dict
         param_dict = dict()
+        
+        global use_mp
+        use_mp = self.use_mp
 
     def _test_models(self):
         """Sanity check on the input models"""
@@ -151,7 +162,7 @@ class NestedSchurDecomposition(object):
         for model in self.models_dict.values():
             # Check if the models are even models
             assert(isinstance(model, ConcreteModel) == True)
-        
+           
     def _add_global_constraints(self):
         """This adds the dummy constraints to the model forcing the local
         parameters to equal the current global parameter values
@@ -324,7 +335,7 @@ class NestedSchurDecomposition(object):
             hess = _calculate_M
             
             tr_options={
-                'xtol': 1e-08,
+                'xtol': 1e-6,
                 }
             
             callback(x0)
@@ -461,6 +472,82 @@ def _optimize(model, d_vals, verbose=False):
     
     return model
 
+
+def _scenario_optimization(k_model, model, parameter_var_name, d_init):
+    
+    valid_parameters_scenario = pe_sets[k_model] 
+    #print(valid_parameters_scenario)
+    valid_parameters = dict(getattr(model, parameter_var_name).items()).keys()
+    model_opt = _optimize(model, d_init)
+    
+    # Possible speed up here - return sparse instead of df - find location of constraints
+    kkt_df, var_ind, con_ind_new = _get_kkt_matrix(model_opt)
+    duals = {key: model_opt.dual[getattr(model_opt, global_constraint_name)[key]] for key, val in getattr(model_opt, global_param_name).items()}
+    col_ind  = [var_ind.loc[var_ind[0] == f'{parameter_var_name}[{v}]'].index[0] for v in valid_parameters]
+    dummy_constraints = _get_dummy_constraints(model_opt)
+    dc = [d for d in dummy_constraints]
+    
+    use_SOLE = True
+    
+    # Perform the calculations to get M and m
+    K = kkt_df.drop(index=dc, columns=dc)
+    E = np.zeros((len(dummy_constraints), K.shape[1]))
+    
+    for i, indx in enumerate(col_ind):
+        E[i, indx] = 1
+  
+    # Get S inverse
+    if not use_SOLE:
+      
+        # Solve by inverting matrices using np.linalg.inv
+        K_i_inv = pd.DataFrame(np.linalg.inv(K.values), index=K.index, columns=K.columns)
+        P = E.dot(K_i_inv.values).dot(E.T)
+        Si = np.linalg.inv(P)
+  
+    elif use_SOLE and not use_conditioning:
+        
+        # Make square matrix (A) of Eq. 14
+        top = (K, E.T)
+        bot = (E, np.zeros((len(dummy_constraints), len(dummy_constraints))))
+    
+        top = np.hstack(top)
+        bot = np.hstack(bot)
+        A = np.vstack((top, bot))
+    
+        # Make the rhs (b) of Eq. 14
+        b = np.vstack((np.zeros((K.shape[0], len(dummy_constraints))), -1*np.eye(len(dummy_constraints))))
+    
+        # Solve for Qi and Si
+        rhs = np.linalg.solve(A,b)
+        Si = rhs[-rhs.shape[1]:, :]
+    
+    elif use_SOLE and use_conditioning:
+        
+        # Make square matrix (A) of Eq. 16 to solve for P_inv
+        top = (K, E.T)
+        bot = (E, np.zeros((len(dummy_constraints), len(dummy_constraints))))
+    
+        top = np.hstack(top)
+        bot = np.hstack(bot)
+        A = np.vstack((top, bot))
+    
+        # Make the rhs (b) of Eq. 16 - this is R1 = 0, R2 = -I, as above
+        b = np.vstack((np.zeros((K.shape[0], len(dummy_constraints))), -1*np.eye(len(dummy_constraints))))
+    
+        # Solve for Qi and Si
+        rhs = np.linalg.solve(A,b)
+        P_inv = rhs[-rhs.shape[1]:, :]
+        Si = P_inv
+        Si -= Q_value*np.eye(Si.shape[0])
+    
+    Mi = pd.DataFrame(Si, index=valid_parameters, columns=valid_parameters)
+    
+    if not cross_updating:
+        parameters_not_to_update = set(valid_parameters).difference(set(valid_parameters_scenario))
+        Mi = Mi.drop(index=list(parameters_not_to_update), columns=list(parameters_not_to_update))
+   
+    return Mi, duals, model_opt.objective.expr()
+
 def _inner_problem(d_init_list, models, generate_gradients=False, initialize=False):
     """Calculates the inner problem using the scenario info and the global
     parameters d
@@ -493,13 +580,13 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     global cross_updating
     global Q_value
     global use_conditioning
+    global use_mp
     
     opt_count += 1      
     options = {'verbose' : False}
     _models = copy.copy(models) 
     
     verbose = False
-    
     
     Si = []
     Ki = []
@@ -521,96 +608,54 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
             print(iteration_spacer.substitute(iter=f'Inner Problem {opt_count}'))
             print(f'Current parameter set: {d_init}')
     
-    for k_model, model in _models.items():
-        if verbose:
-            print(f'Performing inner optimization: {k_model}')
+    if use_mp:
+    
+        model_data = list(zip(models.keys(), models.values(), [parameter_var_name]*len(_models), [d_init]*len(_models)))
+
+        with mp.Pool(num_cpus) as pool:
+            results = pool.starmap(_scenario_optimization, model_data)
         
-        valid_parameters_scenario = pe_sets[k_model] 
-        #print(valid_parameters_scenario)
-        valid_parameters = dict(getattr(model, parameter_var_name).items()).keys()
-        model_opt = _optimize(model, d_init)
+        for i, res in enumerate(results):
         
-        # Possible speed up here - return sparse instead of df - find location of constraints
-        kkt_df, var_ind, con_ind_new = _get_kkt_matrix(model_opt)
-        duals = {key: model_opt.dual[getattr(model_opt, global_constraint_name)[key]] for key, val in getattr(model_opt, global_param_name).items()}
-        col_ind  = [var_ind.loc[var_ind[0] == f'{parameter_var_name}[{v}]'].index[0] for v in valid_parameters]
-        dummy_constraints = _get_dummy_constraints(model_opt)
-        dc = [d for d in dummy_constraints]
+            Mi = res[0]
+            duals = res[1]
+            obj_val = res[2]
         
-        
-        use_SOLE = True
-        
-        # Perform the calculations to get M and m
-        K = kkt_df.drop(index=dc, columns=dc)
-        E = np.zeros((len(dummy_constraints), K.shape[1]))
-        
-        for i, indx in enumerate(col_ind):
-            E[i, indx] = 1
-      
-        # Get S inverse
-        if not use_SOLE:
-          
-            # Solve by inverting matrices using np.linalg.inv
-            K_i_inv = pd.DataFrame(np.linalg.inv(K.values), index=K.index, columns=K.columns)
-            P = E.dot(K_i_inv.values).dot(E.T)
-            Si = np.linalg.inv(P)
-      
-        elif use_SOLE and not use_conditioning:
+            M = M.add(Mi).combine_first(M)
+            M = M[parameter_names]
+            M = M.reindex(parameter_names)
+            eig, u = np.linalg.eigh(M)
+            condition = max(abs(eig))/min(abs(eig))      
+            if verbose:
+                print(f'M conditioning: {condition}')
             
-            # Make square matrix (A) of Eq. 14
-            top = (K, E.T)
-            bot = (E, np.zeros((len(dummy_constraints), len(dummy_constraints))))
-        
-            top = np.hstack(top)
-            bot = np.hstack(bot)
-            A = np.vstack((top, bot))
-        
-            # Make the rhs (b) of Eq. 14
-            b = np.vstack((np.zeros((K.shape[0], len(dummy_constraints))), -1*np.eye(len(dummy_constraints))))
-        
-            # Solve for Qi and Si
-            rhs = np.linalg.solve(A,b)
-            Si = rhs[-rhs.shape[1]:, :]
-        
-        elif use_SOLE and use_conditioning:
+            for param in m.index:
+                if param in duals.keys():
+                    m.loc[param] = m.loc[param] + duals[param]
             
-            # Make square matrix (A) of Eq. 16 to solve for P_inv
-            top = (K, E.T)
-            bot = (E, np.zeros((len(dummy_constraints), len(dummy_constraints))))
+            objective_value += obj_val
         
-            top = np.hstack(top)
-            bot = np.hstack(bot)
-            A = np.vstack((top, bot))
-        
-            # Make the rhs (b) of Eq. 16 - this is R1 = 0, R2 = -I, as above
-            b = np.vstack((np.zeros((K.shape[0], len(dummy_constraints))), -1*np.eye(len(dummy_constraints))))
-        
-            # Solve for Qi and Si
-            rhs = np.linalg.solve(A,b)
-            P_inv = rhs[-rhs.shape[1]:, :]
-            Si = P_inv
-            Si -= Q_value*np.eye(Si.shape[0])
-        
-        Mi = pd.DataFrame(Si, index=valid_parameters, columns=valid_parameters)
-        
-        if not cross_updating:
-            parameters_not_to_update = set(valid_parameters).difference(set(valid_parameters_scenario))
-            Mi = Mi.drop(index=list(parameters_not_to_update), columns=list(parameters_not_to_update))
-       
-        M = M.add(Mi).combine_first(M)
-        M = M[parameter_names]
-        M = M.reindex(parameter_names)
-        eig, u = np.linalg.eigh(M)
-        condition = max(abs(eig))/min(abs(eig))      
-        if verbose:
-            print(f'M conditioning: {condition}')
-        
-        for param in m.index:
-            if param in duals.keys():
-                m.loc[param] = m.loc[param] + duals[param]
-        
-        objective_value += model_opt.objective.expr()
-   
+    else:
+    
+        for k_model, model in _models.items():
+            if verbose:
+                print(f'Performing inner optimization: {k_model}')
+            Mi, duals, obj_val = _scenario_optimization(k_model, model, parameter_var_name, d_init)
+            
+            M = M.add(Mi).combine_first(M)
+            M = M[parameter_names]
+            M = M.reindex(parameter_names)
+            eig, u = np.linalg.eigh(M)
+            condition = max(abs(eig))/min(abs(eig))      
+            if verbose:
+                print(f'M conditioning: {condition}')
+            
+            for param in m.index:
+                if param in duals.keys():
+                    m.loc[param] = m.loc[param] + duals[param]
+            
+            objective_value += obj_val
+            
 
     if divmod(opt_count, 10)[1] == 0:
         print('\nIteration\t\tObjective\t\t\tAbs Diff\n')

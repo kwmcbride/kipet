@@ -9,6 +9,7 @@ problem.
 import numpy as np
 import pandas as pd
 
+
 from kipet.library.EstimationPotential import reduce_models
 from kipet.library.NestedSchurDecomposition import NestedSchurDecomposition as NSD
 from kipet.examples.Ex_17_CSTR_setup import make_model_dict
@@ -31,12 +32,14 @@ factor = np.array([1.020269,   0.9819293,  0.96960294,
 # e.g. {'k1' : (0.5, (0.01, 2))}
 d_init_guess = {p.name: (p.init*factor[i], p.bounds) for i, p in enumerate(parameters)}
 
-# If using KIPET, the models may be reduced (recommended)
-# The routine in EstimationPotential can now be called using reduce_models:
-models, param_data = reduce_models(models, parameter_dict=d_init_guess) 
-
-# Update the initial parameter values using the averages from model reduction:
-d_init_guess = param_data['initial_values']
+use_reduced_models = False
+if use_reduced_models:
+    # If using KIPET, the models may be reduced (recommended)
+    # The routine in EstimationPotential can now be called using reduce_models:
+    models, param_data = reduce_models(models, parameter_dict=d_init_guess) 
+    
+    # Update the initial parameter values using the averages from model reduction:
+    d_init_guess = param_data['initial_values']
 
 # NSD - First declare options
 # This is important - the name of the global parameter set:
@@ -47,14 +50,19 @@ options = {
     'method': 'trust-constr',
     'conditioning' : False,
     'conditioning_Q': 10,
+    'use_mp': True,
     }
 
 # Declare NSD instance with dict of models, the dict of parameter values and bounds
 # the parameter set name, and NSD options
 nsd = NSD(models, d_init_guess, parameter_var_name, options)
 
+#%%
+import time
+start = time.time()
 # Call NSD method to calculate the optimal parameter values:
 results, od = nsd.nested_schur_decomposition(debug=True)
-
+end = time.time()
+print(f'The time required is {end - start:0.2f} seconds')
 # Final parameter values can also be accessed using nsd.parameters_opt attr
 print(f'\nThe final parameter values are:\n{nsd.parameters_opt}')

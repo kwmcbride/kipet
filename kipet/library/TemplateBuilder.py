@@ -12,6 +12,8 @@ import pandas as pd
 from pyomo.environ import *
 from pyomo.dae import *
 
+from kipet.library.EstimationPotential import reduce_models
+
 try:
     if sys.version_info.major > 3:
         import importlib
@@ -901,7 +903,11 @@ class TemplateBuilder(object):
             if not self._meas_times:
                 raise RuntimeError('Need to add measurement times')
 
-    def create_pyomo_model(self, start_time=None, end_time=None, parameter_normalization=False):
+    def create_pyomo_model(self,
+                           start_time=None,
+                           end_time=None,
+                           parameter_normalization=False,
+                           ):
         """Create a pyomo model.
 
         This method is the core method for further simulation or optimization studies
@@ -1451,7 +1457,6 @@ class TemplateBuilder(object):
             self.set_estinit_extra_species(pyomo_model,
                                            self._initextra_est_list,
                                            check=False)
-
 
         return pyomo_model
 
