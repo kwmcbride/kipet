@@ -146,14 +146,14 @@ def make_model_dict():
         
     parameters = [
             KineticParameter('Tf',   (283.15, 400), 293.15, 0.09),
-            KineticParameter('Cfa',  (0, 5000), 2500, 0.01),
+            KineticParameter('Cfa',  (1000, 5000), 2500, 0.01),
             KineticParameter('rho',  (100, 2000), 1025, 0.01),
-            KineticParameter('delH', (0.0, 400), 160, 0.01),
-            KineticParameter('ER',   (0.0, 5000), 255, 0.01),
-            KineticParameter('k',    (0.0, 10), 2.5, 0.01),
-            KineticParameter('Tfc',  (283.15, 300), 283.15, 0.01),
-            KineticParameter('rhoc', (0.0, 2000), 1000, 0.01),
-            KineticParameter('h',    (0.0, 5000), 3600, 0.01),
+            KineticParameter('delH', (50, 400), 160, 0.01),
+            KineticParameter('ER',   (100, 5000), 255, 0.01),
+            KineticParameter('k',    (0.1, 10), 2.5, 0.01),
+            KineticParameter('Tfc',  (270, 300), 283.15, 0.01),
+            KineticParameter('rhoc', (700, 2000), 1000, 0.01),
+            KineticParameter('h',    (500, 5000), 3600, 0.01),
             ]
     
     constants = {

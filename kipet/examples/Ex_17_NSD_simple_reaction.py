@@ -51,7 +51,7 @@ def rule_objective(model):
 
     for k in model.mixture_components & model.measured_data:
         for t, v in model.C.items():
-            obj += 0.5*(model.C[t] - model.Z[t]) ** 2 / model.sigma[k]**2
+            obj += 1e6*0.5*(model.C[t] - model.Z[t]) ** 2 / model.sigma[k]**2
     
     for k in model.complementary_states & model.measured_data:
         for t, v in model.U.items():
@@ -211,7 +211,7 @@ if __name__ == "__main__":
     pyomo_model2 = build.create_pyomo_model()
     simulator2 = PyomoSimulator(pyomo_model2)
     Z_data2, X_data2, results2 = run_simulation(simulator2)
-    
+
     conc_measurement_index2 = [25, 28, 80]
     Z_data2 = results2.Z.iloc[conc_measurement_index2, :]
     #Z_data2 = add_noise_to_signal(Z_data2, 1e-5)
@@ -245,7 +245,7 @@ if __name__ == "__main__":
     build._parameters_init = {k: v[0] for k, v in zip(build._parameters.keys(), d_init_guess.values())}
     build.add_concentration_data(Z_data3)
     model = build.create_pyomo_model()
-    models[2] = model
+    #models[2] = model
     
     # Scenario 4 #############################################################
     builder4 = TemplateBuilder()   
@@ -268,7 +268,7 @@ if __name__ == "__main__":
     build._parameters_init = {k: v[0] for k, v in zip(build._parameters.keys(), d_init_guess.values())}
     build.add_concentration_data(Z_data4)
     model = build.create_pyomo_model()
-    models[3] = model
+    #models[3] = model
     
     for k, model in models.items():
         check_discretization(model)
@@ -278,12 +278,21 @@ if __name__ == "__main__":
     # Specify the parameter name in your model (required!)
     
     options = {
-               'method': 'trust-constr',
-               'use_est_param': True,
-               }
+    'method': 'trust-constr',
+    'use_scaling' : True,
+    'conditioning' : False,
+    'conditioning_Q': 10,
+    'use_mp': False,
+    }
     
     parameter_var_name = 'P'
     nsd = NSD(models, d_init_guess, parameter_var_name, options)
     results = nsd.nested_schur_decomposition()
     
     print(f'\nThe final parameter values are:\n{nsd.parameters_opt}')
+    #%%
+    from kipet.library.common.plot_results import plot_results
+    plot_results(nsd.models_dict)
+
+
+    

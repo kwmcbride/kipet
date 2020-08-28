@@ -197,6 +197,8 @@ class NestedSchurDecomposition(object):
         
     def _add_condition_terms(self):
         
+        """Adds the conditioning terms to the objective function"""
+        
         global global_param_name
         
         for model in self.models_dict.values():
@@ -204,6 +206,24 @@ class NestedSchurDecomposition(object):
             
                 Q_term = self.conditioning_Q*(model.P[key] - getattr(model, global_param_name)[key])**2
                 model.objective.expr += Q_term
+                
+        return None
+    
+    def _add_barrier_terms(self, mu=1e4):
+        
+        """Adds the conditioning terms to the objective function"""
+        
+        for model in self.models_dict.values():
+            
+            model.mu = Var(initialize=mu)
+            model.mu.fix()
+            #for key, param in model.P.items():
+            # Set the global bounds here - they are currently the same in each model
+            B_term = model.mu*sum(log(model.P[key].bounds[1] - model.P[key]) for key in model.P)
+            B_term += model.mu*sum(log(model.P[key] - model.P[key].bounds[0]) for key in model.P)
+            model.objective.expr -= B_term
+            
+            print(model.objective.expr.to_string())
                 
         return None
         
@@ -268,12 +288,16 @@ class NestedSchurDecomposition(object):
             
                 for i in model.dXdt:
                     scale[id(model.dXdt[i])] = 1
+                    
+                # Add algebraics here - Tom's models need this?
             
                 for k, v in model.odes.items(): 
                     scaled_expr = scale_expression(v.body, scale)
                     model.odes[k] = scaled_expr == 0
+                    #print(scaled_expr)
                 
             return models
+        
         def scale_expression(expr, scale):
             
             visitor = ScalingVisitor(scale)
@@ -281,21 +305,33 @@ class NestedSchurDecomposition(object):
         
         self.models_dict = scale_parameters(models)
 
+        scaled_bounds = {}
+
         for key, model in self.models_dict.items():
             rho = 10
             for k, v in model.P.items():
-                ub = 1.5
-                lb = 0.5
+                ub = self.d_info[k][1][1]/self.d_init_unscaled[k]
+                lb = self.d_info[k][1][0]/self.d_init_unscaled[k]
+                
+                if ub < 1:
+                    print('Bounds issue, pushing upper bound higher')
+                    ub = 1.1
+                if lb > 1:
+                    print('Bounds issue, pushing lower bound lower')
+                    lb = 0.9
+                
+                scaled_bounds[k] = (lb, ub)
+                
                 model.P[k].setlb(lb)
                 model.P[k].setub(ub)
                 model.P[k].unfix()
                 model.P[k].set_value(1)
                 
-                # print(v.value)
-                # print(f'LB: {self.d_info[k][1][0]/self.d_init_unscaled[k]}')
-                # print(f'UB: {self.d_info[k][1][1]/self.d_init_unscaled[k]}')
+                print(k)
+                print(f'LB: {self.d_info[k][1][0]/self.d_init_unscaled[k]}')
+                print(f'UB: {self.d_info[k][1][1]/self.d_init_unscaled[k]}')
             
-        self.d_info = {k: (1, (0.5, 1.5)) for k, v in self.d_info.items()}
+        self.d_info = {k: (1, scaled_bounds[k]) for k, v in self.d_info.items()}
         self.d_init = {k: v[0] for k, v in self.d_info.items()}
             
         return None
@@ -349,8 +385,15 @@ class NestedSchurDecomposition(object):
                                bounds=d_bounds,
                                options=tr_options,
                            )
-            self.parameters_opt = {k: results.x[i]*self.d_init_unscaled[k] for i, k in enumerate(self.d_init.keys())}
             
+            if self.use_scaling:
+                s_factor = self.d_init_unscaled
+            else:
+                s_factor = {k: 1 for k in self.d_init.keys()}
+            
+            self.parameters_opt = {k: results.x[i]*s_factor[k] for i, k in enumerate(self.d_init.keys())}
+
+        # Use this now to build the line search method
         if self.method in ['newton']:
             x0 = list(d_init.values())
             results = self._run_newton_step(x0, self.models_dict)
@@ -402,26 +445,77 @@ class NestedSchurDecomposition(object):
         
         return None
 
-    
+
     def _run_newton_step(self, d_init, models):
         """This runs a basic Newton step algorithm - use a decent alpha!
         
         UNDER CONSTRUCTION!
         """
         tol = 1e-6
-        alpha = 0.4
+        alpha = 0.6
         max_iter = 40
         counter = 0
         self.d_iter.append(d_init)
-        
+        #self._add_barrier_terms(mu=0)
+        for model in models.values(): 
+            model.mu = Var(initialize=1)
+            model.mu.fix()
+         
         while True:   
         
-            _inner_problem(d_init, models, generate_gradients=False)
-            M = opt_dict[opt_count]['M']
-            m = opt_dict[opt_count]['m']
-            d_step = np.linalg.inv(M).dot(-m)
-            d_init = [d_init[i] + alpha*d_step[i] for i, v in enumerate(d_init)]
-            self.d_iter.append(d_init)
+            obj_val, d_new  = _inner_problem(d_init, models, generate_gradients=False)
+            
+            self.d_iter.append(d_new)
+            
+            d_step = max([abs(np.array(d_init) - np.array(list(d_new.values())))])
+            
+            counter = 0
+            # alpha = 1
+            # while True:        
+        
+            #     eta = 1e-4
+            #     rho = 0.5
+            
+            #     print(alpha)
+                
+            #     d_step = np.linalg.solve(Mo, -mo)
+            #     d_step = {k: d_step[i][0] for i, k in enumerate(d_init.keys())}
+                
+            #     objs = []
+                
+            #     for j in range(0, 101, 1):
+            #         alpha = j/100
+            #         d_new = {k: alpha*d_step[k] + d_init[k] for k in d_init.keys()}
+            #         objective_value_new, Mn, mn = _outer_problem(_models, M, m, parameter_var_name, d_new)
+            #         objs.append(objective_value_new)
+                
+            #     import matplotlib.pyplot as plt
+            #     plt.plot(objs)
+                
+            #     print(f'orig arm: {objective_value_new}')
+        
+            #     # Armijo Condition
+            #     armijo_condition = _armijo_condition(d_init, d_step, alpha, mo, objective_value, objective_value_new)
+            #     # Fraction to the Boundary
+            #     frac_bound_condition = _fraction_to_boundary_condition(_models, d_init, d_new)
+            
+            #     if armijo_condition and frac_bound_condition:
+            #         d_init = d_new
+                    
+            #         for model in _models.values():
+            #             model.mu.set_value(model.mu.value/2)
+                    
+            #         print('You can continue')
+            #         break
+            #     else:
+            #         alpha = alpha*rho
+            #         counter += 1
+            #         print('You need to reduce step length (alpha) and try again')
+                
+            #     if counter >= 20:
+            #         break
+                
+            
             
             if max(d_step) <= tol:
                 
@@ -433,6 +527,9 @@ class NestedSchurDecomposition(object):
                 break
             
             counter += 1
+            
+            d_init = list(d_new.values()) # {k: d_new[i] for i, k in enumerate(d_init.keys())}
+            print(d_init)
             
         return d_init
                  
@@ -475,6 +572,7 @@ def _optimize(model, d_vals, verbose=False):
 
 def _scenario_optimization(k_model, model, parameter_var_name, d_init):
     
+    global pe_sets
     valid_parameters_scenario = pe_sets[k_model] 
     #print(valid_parameters_scenario)
     valid_parameters = dict(getattr(model, parameter_var_name).items()).keys()
@@ -547,6 +645,32 @@ def _scenario_optimization(k_model, model, parameter_var_name, d_init):
         Mi = Mi.drop(index=list(parameters_not_to_update), columns=list(parameters_not_to_update))
    
     return Mi, duals, model_opt.objective.expr()
+
+def _outer_problem(models, M, m, parameter_var_name, d_init, verbose=False):
+    
+    objective_value = 0
+    
+    for k_model, model in models.items():
+        if verbose:
+            print(f'Performing inner optimization: {k_model}')
+        Mi, duals, obj_val = _scenario_optimization(k_model, model, parameter_var_name, d_init)
+        
+        M = M.add(Mi).combine_first(M)
+        M = M[parameter_names]
+        M = M.reindex(parameter_names)
+        eig, u = np.linalg.eigh(M)
+        condition = max(abs(eig))/min(abs(eig))      
+        if verbose:
+            print(f'M conditioning: {condition}')
+        
+        for param in m.index:
+            if param in duals.keys():
+                m.loc[param] = m.loc[param] + duals[param]
+        
+        objective_value += obj_val
+        #print(obj_val)
+        
+    return objective_value, M, m
 
 def _inner_problem(d_init_list, models, generate_gradients=False, initialize=False):
     """Calculates the inner problem using the scenario info and the global
@@ -636,26 +760,10 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
             objective_value += obj_val
         
     else:
-    
-        for k_model, model in _models.items():
-            if verbose:
-                print(f'Performing inner optimization: {k_model}')
-            Mi, duals, obj_val = _scenario_optimization(k_model, model, parameter_var_name, d_init)
-            
-            M = M.add(Mi).combine_first(M)
-            M = M[parameter_names]
-            M = M.reindex(parameter_names)
-            eig, u = np.linalg.eigh(M)
-            condition = max(abs(eig))/min(abs(eig))      
-            if verbose:
-                print(f'M conditioning: {condition}')
-            
-            for param in m.index:
-                if param in duals.keys():
-                    m.loc[param] = m.loc[param] + duals[param]
-            
-            objective_value += obj_val
-            
+
+        objective_value, M, m = _outer_problem(_models, M, m, parameter_var_name, d_init)
+       # print(f'orig obj: {objective_value}')
+       # print(M, m)
 
     if divmod(opt_count, 10)[1] == 0:
         print('\nIteration\t\tObjective\t\t\tAbs Diff\n')
@@ -681,6 +789,34 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     else:
         return None
 
+def _armijo_condition(d, delta_d, alpha, m, objective_value, objective_value_step):
+    """Calculates the Armijo condition for the line search
+    
+    """    
+    eta = 1e-4
+    
+    armijo_term = eta*alpha*m.dual.T @ np.array(list(delta_d.values()))
+    armijo_condition = objective_value_step <= (objective_value + armijo_term)
+    
+    print(f'{objective_value_step}, {objective_value}, {armijo_term}')
+    
+    print(f'{objective_value_step} <= {(objective_value + armijo_term)}')
+    
+    print(f'Armijo condition met: {armijo_condition}')
+
+    return armijo_condition
+
+def _fraction_to_boundary_condition(models, d, d_step):
+    """Fraction to the boundary for the current alpha and mu
+    
+    """
+    mu = list(models.values())[0].mu.value
+    tau = max(0.99, 1 - mu)
+    frac_bound_condition = all(d_step[k] >= (1 - tau)*d[k] for k in d.keys())
+    print(f'Fraction to the boundary condition met: {frac_bound_condition}')
+    
+    return frac_bound_condition
+    
 def _get_kkt_matrix(model):
     """This uses pynumero to get the Hessian and Jacobian in order to build the
     KKT matrix

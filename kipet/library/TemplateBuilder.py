@@ -12,8 +12,6 @@ import pandas as pd
 from pyomo.environ import *
 from pyomo.dae import *
 
-from kipet.library.EstimationPotential import reduce_models
-
 try:
     if sys.version_info.major > 3:
         import importlib
@@ -505,6 +503,8 @@ class TemplateBuilder(object):
             None
 
         """
+        print(f'This is being added: {data_type}')
+        
         built_in_data_types = {
             'concentration' : 'C',
             'complementary_states' : 'U',
@@ -1158,15 +1158,15 @@ class TemplateBuilder(object):
                     getattr(pyomo_model, var)[k].fixed = True
             
             else:
-                setattr(pyomo_model, var, Var(pyomo_model.allmeas_times,
-                                pyomo_model.mixture_components,
-                                bounds=c_bounds,
-                                initialize=1))
+                setattr(pyomo_model, var, None)# Var(pyomo_model.allmeas_times,
+                                #pyomo_model.mixture_components,
+                                #bounds=c_bounds,
+                                #initialize=1))
     
-                for time, comp in getattr(pyomo_model, var):
-                    if time == pyomo_model.start_time.value:
-                      #  print(f'initial values: {time}, {comp}')
-                        getattr(pyomo_model, var)[time, comp].value = self._init_conditions[comp]
+                # for time, comp in getattr(pyomo_model, var):
+                #     if time == pyomo_model.start_time.value:
+                #       #  print(f'initial values: {time}, {comp}')
+                #         getattr(pyomo_model, var)[time, comp].value = self._init_conditions[comp]
 
         # End intialization for C and U
         

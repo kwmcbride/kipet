@@ -9,7 +9,6 @@ problem.
 import numpy as np
 import pandas as pd
 
-
 from kipet.library.EstimationPotential import reduce_models
 from kipet.library.NestedSchurDecomposition import NestedSchurDecomposition as NSD
 from kipet.examples.Ex_17_CSTR_setup import make_model_dict
@@ -32,7 +31,7 @@ factor = np.array([1.020269,   0.9819293,  0.96960294,
 # e.g. {'k1' : (0.5, (0.01, 2))}
 d_init_guess = {p.name: (p.init*factor[i], p.bounds) for i, p in enumerate(parameters)}
 
-use_reduced_models = False
+use_reduced_models = True
 if use_reduced_models:
     # If using KIPET, the models may be reduced (recommended)
     # The routine in EstimationPotential can now be called using reduce_models:
@@ -48,9 +47,10 @@ parameter_var_name = 'P'
 # Other options should be placed in a dict:
 options = {
     'method': 'trust-constr',
+    'use_scaling' : True,
     'conditioning' : False,
     'conditioning_Q': 10,
-    'use_mp': True,
+    'use_mp': False,
     }
 
 # Declare NSD instance with dict of models, the dict of parameter values and bounds
@@ -66,3 +66,8 @@ end = time.time()
 print(f'The time required is {end - start:0.2f} seconds')
 # Final parameter values can also be accessed using nsd.parameters_opt attr
 print(f'\nThe final parameter values are:\n{nsd.parameters_opt}')
+#%%
+from kipet.library.common.plot_results import plot_results
+plot_results(nsd.models_dict)
+
+
