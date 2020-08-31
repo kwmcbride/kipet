@@ -327,9 +327,9 @@ class NestedSchurDecomposition(object):
                 model.P[k].unfix()
                 model.P[k].set_value(1)
                 
-                print(k)
-                print(f'LB: {self.d_info[k][1][0]/self.d_init_unscaled[k]}')
-                print(f'UB: {self.d_info[k][1][1]/self.d_init_unscaled[k]}')
+                # print(k)
+                # print(f'LB: {self.d_info[k][1][0]/self.d_init_unscaled[k]}')
+                # print(f'UB: {self.d_info[k][1][1]/self.d_init_unscaled[k]}')
             
         self.d_info = {k: (1, scaled_bounds[k]) for k, v in self.d_info.items()}
         self.d_init = {k: v[0] for k, v in self.d_info.items()}
@@ -395,9 +395,17 @@ class NestedSchurDecomposition(object):
 
         # Use this now to build the line search method
         if self.method in ['newton']:
-            x0 = list(d_init.values())
+            x0 = d_init
             results = self._run_newton_step(x0, self.models_dict)
-            self.parameters_opt = {k: results[i] for i, k in enumerate(self.d_init.keys())}
+            
+            if self.use_scaling:
+                s_factor = self.d_init_unscaled
+            else:
+                s_factor = {k: 1 for k in self.d_init.keys()}
+                
+            self.parameters_opt = {k: results[k]*s_factor[k] for k in results.keys()}
+
+            
         
         if debug:
             return results, param_dict
@@ -455,69 +463,104 @@ class NestedSchurDecomposition(object):
         alpha = 0.6
         max_iter = 40
         counter = 0
-        self.d_iter.append(d_init)
-        #self._add_barrier_terms(mu=0)
+        #self._add_barrier_terms(mu=1e2)
+        
+        for model in models.values():
+            
+            Du=None
+            Dl=None
+            
+            #Du = {k: v.bounds[1] for k, v in model.P.items()}
+            #Dl = {k: v.bounds[0] for k, v in model.P.items()}
+            #Du = np.diag([v.bounds[1] for k, v in model.P.items()])
+            #Dl = np.diag([v.bounds[0] for k, v in model.P.items()])
+            break
+        
+        
         for model in models.values(): 
             model.mu = Var(initialize=1)
             model.mu.fix()
-         
+            
+            # You need to remove the bounds placed on the params
+            for k, v in model.P.items():
+                model.P[k].setub(None)
+                model.P[k].setlb(None)
+
+        print(d_init)   
+        print('Staring Newton Sequence')
+        
+        counter_ns = 1
+        
         while True:   
         
-            obj_val, d_new  = _inner_problem(d_init, models, generate_gradients=False)
+            print(f'\nIteration {counter_ns}')
             
-            self.d_iter.append(d_new)
-            
-            d_step = max([abs(np.array(d_init) - np.array(list(d_new.values())))])
-            
-            counter = 0
-            # alpha = 1
-            # while True:        
+            self.d_iter.append(d_init)
+            M_size = len(d_init)
+            M = pd.DataFrame(np.zeros((M_size, M_size)), index=parameter_names, columns=parameter_names)
+            m = pd.DataFrame(np.zeros((M_size, 1)), index=parameter_names, columns=['dual'])
+            objective_value = 0    
         
-            #     eta = 1e-4
-            #     rho = 0.5
+            objective_value_iter, Mn, mn = _outer_problem(models, M, m, parameter_var_name, d_init, Du=Du, Dl=Dl)
+            #print(objective_value_iter)
+            #print(Mn, mn)
             
+            d_step = np.linalg.solve(Mn, -mn)
+            d_step = {k: d_step[i][0] for i, k in enumerate(d_init.keys())}
+                
+            #print(d_step)
+            eta = 1e-4
+            arm = eta*mn.dual.T @ np.array(list(d_step.values()))
+            
+                
+            # objs = []
+            # at = []
+            # for j in range(0, 101, 10):
+            #     alpha = j/100
             #     print(alpha)
-                
-            #     d_step = np.linalg.solve(Mo, -mo)
-            #     d_step = {k: d_step[i][0] for i, k in enumerate(d_init.keys())}
-                
-            #     objs = []
-                
-            #     for j in range(0, 101, 1):
-            #         alpha = j/100
-            #         d_new = {k: alpha*d_step[k] + d_init[k] for k in d_init.keys()}
-            #         objective_value_new, Mn, mn = _outer_problem(_models, M, m, parameter_var_name, d_new)
-            #         objs.append(objective_value_new)
-                
-            #     import matplotlib.pyplot as plt
-            #     plt.plot(objs)
-                
-            #     print(f'orig arm: {objective_value_new}')
-        
-            #     # Armijo Condition
-            #     armijo_condition = _armijo_condition(d_init, d_step, alpha, mo, objective_value, objective_value_new)
-            #     # Fraction to the Boundary
-            #     frac_bound_condition = _fraction_to_boundary_condition(_models, d_init, d_new)
+            #     d_new = {k: alpha*d_step[k] + d_init[k] for k in d_init.keys()}
+            #     objective_value_new, Ma, ma = _outer_problem(models, M, m, parameter_var_name, d_new)
+            #     objs.append(objective_value_new)
+            #     at.append(objective_value_iter + alpha*arm)
             
-            #     if armijo_condition and frac_bound_condition:
-            #         d_init = d_new
-                    
-            #         for model in _models.values():
-            #             model.mu.set_value(model.mu.value/2)
-                    
-            #         print('You can continue')
-            #         break
-            #     else:
-            #         alpha = alpha*rho
-            #         counter += 1
-            #         print('You need to reduce step length (alpha) and try again')
-                
-            #     if counter >= 20:
-            #         break
-                
+            # import matplotlib.pyplot as plt
+            # plt.plot(objs)
+            # plt.plot(at)
+    
+            alpha = 1
+            rho = 0.5
+            counter_ls = 1
+    
+            while True:
             
+                print(f'Iteration {counter_ns}-{counter_ls}')
+                d_new = {k: alpha*d_step[k] + d_init[k] for k in d_init.keys()}
+                print(d_new)
+                objective_value_new, Ma, ma = _outer_problem(models, M, m, parameter_var_name, d_new)
+                # Armijo Condition
+                armijo_condition = _armijo_condition(d_init, d_step, alpha, arm, objective_value_iter, objective_value_new)
+                # Fraction to the Boundary
+                frac_bound_condition = _fraction_to_boundary_condition(models, d_init, d_new)
             
-            if max(d_step) <= tol:
+                if armijo_condition and frac_bound_condition:
+                    d_init = d_new
+                    for model in models.values():
+                        model.mu.set_value(model.mu.value/2)
+                    counter = 0
+                    break
+                else:
+                    alpha = alpha*rho
+                    counter += 1
+                    print('You need to reduce step length (alpha) and try again')
+                
+                if counter >= 20:
+                    # counter = 0
+                    print('You broke it')
+                    break
+                
+                counter_ls += 1
+                 
+            if max([abs(v) for v in d_step.values()]) <= tol:
                 
                 print(f'Terminating sequence: minimum tolerance in step size reached ({tol}).')
                 break
@@ -527,9 +570,8 @@ class NestedSchurDecomposition(object):
                 break
             
             counter += 1
-            
-            d_init = list(d_new.values()) # {k: d_new[i] for i, k in enumerate(d_init.keys())}
-            print(d_init)
+            counter_ns += 1
+            d_init = d_new
             
         return d_init
                  
@@ -646,7 +688,7 @@ def _scenario_optimization(k_model, model, parameter_var_name, d_init):
    
     return Mi, duals, model_opt.objective.expr()
 
-def _outer_problem(models, M, m, parameter_var_name, d_init, verbose=False):
+def _outer_problem(models, M, m, parameter_var_name, d_init, verbose=False, Dl=None, Du=None):
     
     objective_value = 0
     
@@ -666,9 +708,16 @@ def _outer_problem(models, M, m, parameter_var_name, d_init, verbose=False):
         for param in m.index:
             if param in duals.keys():
                 m.loc[param] = m.loc[param] + duals[param]
-        
+            
+        if Du is not None and Dl is not None:
+            Dk = {k: v.value for k, v in model.P.items()}
+            for param in m.index:
+                if param in duals.keys():
+                    m.loc[param] = m.loc[param] + 1/(Du[param] - Dk[param]) * model.mu.value
+                    m.loc[param] = m.loc[param] - 1/(Dk[param] - Dl[param]) * model.mu.value
+                
         objective_value += obj_val
-        #print(obj_val)
+
         
     return objective_value, M, m
 
@@ -789,20 +838,19 @@ def _inner_problem(d_init_list, models, generate_gradients=False, initialize=Fal
     else:
         return None
 
-def _armijo_condition(d, delta_d, alpha, m, objective_value, objective_value_step):
+def _armijo_condition(d, delta_d, alpha, arm, objective_value, objective_value_step):
     """Calculates the Armijo condition for the line search
     
     """    
-    eta = 1e-4
+    print(alpha)
     
-    armijo_term = eta*alpha*m.dual.T @ np.array(list(delta_d.values()))
+    armijo_term = alpha*arm
     armijo_condition = objective_value_step <= (objective_value + armijo_term)
     
     print(f'{objective_value_step}, {objective_value}, {armijo_term}')
-    
     print(f'{objective_value_step} <= {(objective_value + armijo_term)}')
     
-    print(f'Armijo condition met: {armijo_condition}')
+   # print(f'Armijo condition met: {armijo_condition}')
 
     return armijo_condition
 
@@ -813,7 +861,11 @@ def _fraction_to_boundary_condition(models, d, d_step):
     mu = list(models.values())[0].mu.value
     tau = max(0.99, 1 - mu)
     frac_bound_condition = all(d_step[k] >= (1 - tau)*d[k] for k in d.keys())
-    print(f'Fraction to the boundary condition met: {frac_bound_condition}')
+    
+    #for k in d.keys():
+        #print(f'{d_step[k]} >= {(1 - tau)*d[k]}')
+    
+    #print(f'Fraction to the boundary condition met: {frac_bound_condition}')
     
     return frac_bound_condition
     

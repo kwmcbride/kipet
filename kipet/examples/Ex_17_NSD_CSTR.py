@@ -46,12 +46,14 @@ parameter_var_name = 'P'
 
 # Other options should be placed in a dict:
 options = {
-    'method': 'trust-constr',
+    'method': 'newton', #'trust-constr',
     'use_scaling' : True,
-    'conditioning' : False,
+    'conditioning' : True,
     'conditioning_Q': 10,
     'use_mp': False,
     }
+
+#%%
 
 # Declare NSD instance with dict of models, the dict of parameter values and bounds
 # the parameter set name, and NSD options
@@ -63,7 +65,7 @@ start = time.time()
 # Call NSD method to calculate the optimal parameter values:
 results, od = nsd.nested_schur_decomposition(debug=True)
 end = time.time()
-print(f'The time required is {end - start:0.2f} seconds')
+print(f'The time required was {end - start:0.2f} seconds')
 # Final parameter values can also be accessed using nsd.parameters_opt attr
 print(f'\nThe final parameter values are:\n{nsd.parameters_opt}')
 #%%

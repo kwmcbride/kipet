@@ -276,9 +276,9 @@ if __name__ == "__main__":
     
     # Perform the NSD parameter optimization
     # Specify the parameter name in your model (required!)
-    
+    #%%
     options = {
-    'method': 'trust-constr',
+    'method': 'newton',
     'use_scaling' : True,
     'conditioning' : False,
     'conditioning_Q': 10,
@@ -286,13 +286,32 @@ if __name__ == "__main__":
     }
     
     parameter_var_name = 'P'
+    
+    import time
+    start = time.time()
+    
     nsd = NSD(models, d_init_guess, parameter_var_name, options)
-    results = nsd.nested_schur_decomposition()
+    results, pd = nsd.nested_schur_decomposition(debug=True)
+
+    end = time.time()
+    print(f'The time required was {end-start:0.2f} seconds')
     
     print(f'\nThe final parameter values are:\n{nsd.parameters_opt}')
-    #%%
+    
     from kipet.library.common.plot_results import plot_results
     plot_results(nsd.models_dict)
-
-
+#%%
+    if pd:
+        x = [v[0] for v in pd.values()]
+        y = [v[1] for v in pd.values()]
+        plt.plot(x, y)
+    #else:
+        
+        
+        
+        x = [v['k1'] for v in neg_iter]
+        y = [v['k2'] for v in neg_iter]
+        plt.plot(x, y, 'g')
+    
+    #plt.plot(x, y)
     
