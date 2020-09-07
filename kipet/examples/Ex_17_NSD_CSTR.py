@@ -10,7 +10,8 @@ import numpy as np
 import pandas as pd
 
 from kipet.library.EstimationPotential import reduce_models
-from kipet.library.NestedSchurDecomposition import NestedSchurDecomposition as NSD
+# from kipet.library.NestedSchurDecomposition import NestedSchurDecomposition as NSD
+from kipet.library.NSD_new import NestedSchurDecomposition as NSD
 from kipet.examples.Ex_17_CSTR_setup import make_model_dict
 
 # Models and data are generated in make_model_dict from Ex_17_CSTR_setup
@@ -46,9 +47,9 @@ parameter_var_name = 'P'
 
 # Other options should be placed in a dict:
 options = {
-    'method': 'newton', #'trust-constr',
+    'method': 'ip_line_search', #'trust-constr', #'trust-constr',
     'use_scaling' : True,
-    'conditioning' : True,
+    'conditioning' : False,
     'conditioning_Q': 10,
     'use_mp': False,
     }

@@ -19,7 +19,7 @@ from kipet.library.PyomoSimulator import PyomoSimulator
 from kipet.library.TemplateBuilder import TemplateBuilder
 
 from kipet.library.NestedSchurDecomposition import NestedSchurDecomposition as NSD
-
+from kipet.library.NSD_new import NestedSchurDecomposition as NSD2
 # Helper functions for setting up the objective, the model discretization, and
 # for generating some pseudo experimental data
 
@@ -278,7 +278,8 @@ if __name__ == "__main__":
     # Specify the parameter name in your model (required!)
     #%%
     options = {
-    'method': 'newton',
+    'method': 'ip_line_search',
+    # 'method': 'trust-constr',
     'use_scaling' : True,
     'conditioning' : False,
     'conditioning_Q': 10,
@@ -290,28 +291,28 @@ if __name__ == "__main__":
     import time
     start = time.time()
     
-    nsd = NSD(models, d_init_guess, parameter_var_name, options)
+    nsd = NSD2(models, d_init_guess, parameter_var_name, options)
     results, pd = nsd.nested_schur_decomposition(debug=True)
 
     end = time.time()
     print(f'The time required was {end-start:0.2f} seconds')
     
     print(f'\nThe final parameter values are:\n{nsd.parameters_opt}')
-    
+     
     from kipet.library.common.plot_results import plot_results
     plot_results(nsd.models_dict)
 #%%
-    if pd:
-        x = [v[0] for v in pd.values()]
-        y = [v[1] for v in pd.values()]
-        plt.plot(x, y)
-    #else:
+    # if pd:
+    #     x = [v[0] for v in pd.values()]
+    #     y = [v[1] for v in pd.values()]
+    #     plt.plot(x, y)
+    # #else:
         
         
         
-        x = [v['k1'] for v in neg_iter]
-        y = [v['k2'] for v in neg_iter]
-        plt.plot(x, y, 'g')
+    #     x = [v['k1'] for v in neg_iter]
+    #     y = [v['k2'] for v in neg_iter]
+    #     plt.plot(x, y, 'g')
     
     #plt.plot(x, y)
     
