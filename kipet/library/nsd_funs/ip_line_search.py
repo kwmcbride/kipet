@@ -536,9 +536,14 @@ def ip_line_search(fun, x0, args=(), grad=None, hess=None,
                 print("Interpolating")
                 print(f'alpha_before: {alpha_x}')
                 # Quadratic interpolation for new alpha_x
-                alpha_x = 0.5*alpha_x #0.5*g_k.dot(dx)*alpha_x**2/(f_k - f_new + g_k.dot(dx)*alpha_x)
+                alpha_x = 0.5*g_k.dot(dx)*alpha_x**2/(f_k - f_new + g_k.dot(dx)*alpha_x)
                 if isinstance(alpha_x, np.matrix):
                     alpha_x = alpha_x.item()
+                
+                # YOU NEED AN OUT IF ALPHA IS TOO SMALL HERE
+                if iters_l > 20:
+                    break
+                
                 
             print(f'alpha_after: {alpha_x}')
                 
@@ -546,7 +551,7 @@ def ip_line_search(fun, x0, args=(), grad=None, hess=None,
         step_cond.pop(0) 
         step_status = False
         
-        print(f'the alpha min is: {alpha_x_max}')
+        print(f'the alpha min is: {alpha_x_max} ########################################')
         
         if ((not (alpha_x < alpha_x_max)) and (max(abs(dx)/(1 + abs(x_k))) < 10*e_mach)):
             step_status = True

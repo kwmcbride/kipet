@@ -48,7 +48,7 @@ parameter_var_name = 'P'
 # Other options should be placed in a dict:
 options = {
     'method': 'ip_line_search', #'trust-constr', #'trust-constr',
-    'use_scaling' : True,
+    'use_scaling' : False,
     'conditioning' : False,
     'conditioning_Q': 10,
     'use_mp': False,
@@ -73,4 +73,5 @@ print(f'\nThe final parameter values are:\n{nsd.parameters_opt}')
 from kipet.library.common.plot_results import plot_results
 plot_results(nsd.models_dict)
 
+nsd.plot_paths()
 

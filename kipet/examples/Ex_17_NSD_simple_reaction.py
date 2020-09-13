@@ -280,7 +280,7 @@ if __name__ == "__main__":
     options = {
     'method': 'ip_line_search',
     # 'method': 'trust-constr',
-    'use_scaling' : True,
+    'use_scaling' : False,
     'conditioning' : False,
     'conditioning_Q': 10,
     'use_mp': False,
@@ -301,7 +301,12 @@ if __name__ == "__main__":
      
     from kipet.library.common.plot_results import plot_results
     plot_results(nsd.models_dict)
+    
+    nsd.plot_paths()
+    
 #%%
+
+
     # if pd:
     #     x = [v[0] for v in pd.values()]
     #     y = [v[1] for v in pd.values()]

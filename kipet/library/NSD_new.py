@@ -20,7 +20,7 @@ from string import Template
 import sys
 
 from pyomo.environ import *
-from scipy.sparse import csc_matrix
+from scipy.sparse import csc_matrix, coo_matrix
 from kipet.library.nsd_funs.ip_line_search import ip_line_search
 import pandas as pd
 import sys
@@ -467,15 +467,16 @@ class NestedSchurDecomposition(object):
         else:
             return results
         
-    def plot_paths(self, filename):
+    def plot_paths(self, filename=''):
         
         global param_dict
         
-        df_p = pd.DataFrame(param_dict).T
+        df_p = pd.DataFrame([p for p in param_dict.values()])
         p_max = df_p.max()
         p_min = df_p.min()
         
-        df_p = df_p.drop(index=[0])
+        print(df_p)
+       # df_p = df_p.drop(index=[0])
         
         line_options = {
                         'linewidth' : 3,
@@ -489,10 +490,12 @@ class NestedSchurDecomposition(object):
         else:
             df_norm = df_p
 
+        print(df_norm)
+
         fig = plt.figure(figsize=(12.0, 8.0)) # in inches!
         
         for i, k in enumerate(self.parameters_opt.keys()):
-            plt.plot(df_norm.index, df_norm.loc[:,i], label=k, **line_options)
+            plt.plot(df_norm.index, df_norm.iloc[:,i], label=k, **line_options)
         plt.legend(fontsize=20, ncol=5)
         ax = plt.gca()
         ax.tick_params(axis = 'both', which = 'major', labelsize = 20)
@@ -596,6 +599,7 @@ def _inner_problem(d_init_list, mu, models, kappa_e, generate_gradients=False, i
     global parameter_names
     global use_mp
     global opt_count
+    global param_dict
     
     # Update mu_target inside the NSD
     with open('ipopt.opt', 'r') as f_ipopt:
@@ -622,7 +626,9 @@ def _inner_problem(d_init_list, mu, models, kappa_e, generate_gradients=False, i
     d_init = dict(zip(parameter_names, d_init_list))
     
     print(d_init)
+    param_dict[opt_count] = d_init
     
+    print(param_dict)
     # for k_model, model in models.items():
     #     model.mu.set_value(mu)
     
@@ -671,6 +677,38 @@ def _get_kkt_matrix(model):
     J = nlp.extract_submatrix_jacobian(pyomo_variables=varList, pyomo_constraints=conList)
     H = nlp.extract_submatrix_hessian_lag(pyomo_variables_rows=varList, pyomo_variables_cols=varList)
     
+    sigma_L = []
+    sigma_U = []
+
+    for v in varList:
+        if v in model.ipopt_zL_out.keys():
+            sl = v.value - v.lb
+            if sl < 1e-40:
+                print('on lower', v.name)
+                sl = sl + 10*1e-16*max(1, abs(v.lb))
+            sigma_L.append(model.ipopt_zL_out[v]/sl)
+        else:
+            sigma_L.append(0.0)
+        
+        if v in model.ipopt_zU_out.keys():
+            su = v.ub - v.value
+            if su < 1e-40:
+                print('on upper', v.name)
+                su = su - 10*1e-16*max(1, abs(v.ub))
+            sigma_U.append(model.ipopt_zU_out[v]/su)
+        else:
+            sigma_U.append(0.0)
+
+    SL = np.diag(sigma_L)
+    SU = np.diag(sigma_U)
+    _SL = coo_matrix(SL)
+    _SU = coo_matrix(SU)
+
+    H = H + _SL + _SU
+    #print(sigma_L)
+    #print(sigma_U)
+    
+    
     var_index_names = [v.name for v in varList]
     con_index_names = [v.name for v in conList]
 
@@ -682,6 +720,27 @@ def _get_kkt_matrix(model):
     KKT_up = pd.merge(H_df, J_df.transpose(), left_index=True, right_index=True)
     KKT = pd.concat((KKT_up, J_df))
     KKT = KKT.fillna(0)
+    
+    condition_check = True
+    if condition_check:
+        p_count = 0
+        n_count = 0
+        z_count = 0
+        e, v = np.linalg.eig(H.todense())
+        for i in range(len(e)):
+            if e[i].real > 0:
+                p_count += 1
+            elif e[i].real < 0:
+                n_count += 1
+            else:
+                z_count += 1
+
+        print('---- H ----')
+        print('shape:', H.shape,'rank:', np.linalg.matrix_rank(H.todense()))
+        print('p:', p_count, 'n:', n_count, 'z:', z_count)
+        # print(e)
+        print('---- J ----')
+        print('shape:', J.shape,'rank:', np.linalg.matrix_rank(J.todense()))
     
     return KKT, var_index_names, con_index_names
 
@@ -802,7 +861,113 @@ def _calculate_M(x, mu, scenarios, ke):
         # if verbose:
         #     print(f'M conditioning: {condition}')
          
-    return csc_matrix(M.values)
+    condition_check = True
+    # M matrix condition check
+    if condition_check:
+        p_count = 0
+        n_count = 0
+        z_count = 0
+        e, v = np.linalg.eig(M.values)
+        for i in range(len(e)):
+            if e[i].real > 0:
+                p_count += 1
+            elif e[i].real < 0:
+                n_count += 1
+            else:
+                z_count += 1
+
+        print('M size:',M.shape, 'rank:',np.linalg.matrix_rank(M.values))
+        print('p:', p_count, 'n:', n_count, 'z:', z_count)
+        
+    return M.values #csc_matrix(M.values)
+
+def _JH(model, condition_check = True):
+    """
+    This extracts the Jacobian and the Hessian of the Lagrangian of the model. Also, the Sigma for the duals.
+
+    Args:
+        model (pyomo model): The Jacobian and Hessian are extracted from the model
+
+        condition_check (bool): If True, the eigenvalues and rank for _J and _H are checked.
+        
+    Returns:
+        _J (coo matrix): The Jacobian
+
+        _H (coo matrix): The augmented Hessian (includes Sigma_L, Sigma_U)
+
+        var_index_names (list): The list of variable names for the _J and _H. The index corresponds to the row of _J and _H.
+
+        col_index_name (list): The list of constraint names for the _J. The index corresponds to the column of _J. 
+
+    """
+    ## Jacobian and Hessian of the Lagrangian extractor
+    nlp = PyomoNLP(model)
+    varList = nlp.get_pyomo_variables()
+    conList = nlp.get_pyomo_constraints() 
+    # duals = (-1)*nlp.get_duals() ## Suffix needs to be defined in your model
+    
+    _J = nlp.extract_submatrix_jacobian(pyomo_variables=varList, pyomo_constraints=conList)
+    _H = nlp.extract_submatrix_hessian_lag(pyomo_variables_rows=varList, pyomo_variables_cols=varList)
+
+    sigma_L = []
+    sigma_U = []
+
+    for v in varList:
+        if v in model.ipopt_zL_out.keys():
+            sl = v.value - v.lb
+            if sl < 1e-40:
+                print('on lower', v.name)
+                sl = sl + 10*1e-16*max(1, abs(v.lb))
+            sigma_L.append(model.ipopt_zL_out[v]/sl)
+        else:
+            sigma_L.append(0.0)
+        
+        if v in model.ipopt_zU_out.keys():
+            su = v.ub - v.value
+            if su < 1e-40:
+                print('on upper', v.name)
+                su = su - 10*1e-16*max(1, abs(v.ub))
+            sigma_U.append(model.ipopt_zU_out[v]/su)
+        else:
+            sigma_U.append(0.0)
+
+    SL = np.diag(sigma_L)
+    SU = np.diag(sigma_U)
+    _SL = coo_matrix(SL)
+    _SU = coo_matrix(SU)
+
+    _H = _H + _SL + _SU
+    print(sigma_L)
+    print(sigma_U)
+    
+    var_index_names = [v.name for v in varList]
+    con_index_names = [v.name for v in conList]
+    print(var_index_names)
+    # df_duals = pd.DataFrame({'duals_pynumero':duals, 'duals_suffix':[model.dual[c] for c in conList]}, index=con_index_names)
+    # df_duals.to_csv('duals.csv', index=True, header=True)
+
+    # _J and _H matrix condition check
+    if condition_check:
+        p_count = 0
+        n_count = 0
+        z_count = 0
+        e, v = np.linalg.eig(_H.todense())
+        for i in range(len(e)):
+            if e[i].real > 0:
+                p_count += 1
+            elif e[i].real < 0:
+                n_count += 1
+            else:
+                z_count += 1
+
+        print('---- H ----')
+        print('shape:', _H.shape,'rank:', np.linalg.matrix_rank(_H.todense()))
+        print('p:', p_count, 'n:', n_count, 'z:', z_count)
+        # print(e)
+        print('---- J ----')
+        print('shape:', _J.shape,'rank:', np.linalg.matrix_rank(_J.todense()))
+
+    return _J, _H, var_index_names, con_index_names #, duals
 
 def _calculate_m(x, mu, scenarios, ke):
     """Calculates the matrix m
